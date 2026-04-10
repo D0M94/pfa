@@ -547,6 +547,270 @@ function QuickUpdateAmount({ goalId, currentAmount, currency, onUpdate }) {
   );
 }
 
+// ─── Portfolio Card with manual entry ────────────────────────────────────────
+const EMPTY_POSITION = {
+  name: "", ticker: "", isin: "",
+  assetClass: "ETF", region: "Global", currency: "USD",
+  qty: "", costBasis: "", currentPrice: "", marketValue: "",
+  purchaseDate: "", notes: ""
+};
+
+// Given qty/costBasis/currentPrice/marketValue, derive the missing one
+function derivePosition(pos) {
+  const qty = parseFloat(pos.qty) || 0;
+  const cb = parseFloat(pos.costBasis) || 0;
+  const cp = parseFloat(pos.currentPrice) || 0;
+  const mv = parseFloat(pos.marketValue) || 0;
+
+  // Derive currentPrice from marketValue + qty
+  if (qty && mv && !cp) return { ...pos, currentPrice: String(mv / qty) };
+  // Derive marketValue from qty + currentPrice
+  if (qty && cp && !mv) return { ...pos, marketValue: String(qty * cp) };
+  // Derive qty from marketValue + currentPrice
+  if (mv && cp && !qty) return { ...pos, qty: String(mv / cp) };
+  return pos;
+}
+
+function PortfolioCard({ portfolio, data, setData, readonly }) {
+  const [addingPos, setAddingPos] = useState(false);
+  const [form, setForm] = useState(EMPTY_POSITION);
+  const [editingPosId, setEditingPosId] = useState(null);
+  const [editingPortfolio, setEditingPortfolio] = useState(false);
+  const [portfolioForm, setPortfolioForm] = useState({ name: portfolio.name, broker: portfolio.broker || "" });
+
+  function savePortfolioMeta() {
+    setData(d => ({ ...d, portfolios: d.portfolios.map(p => p.id === portfolio.id ? { ...p, ...portfolioForm } : p) }));
+    setEditingPortfolio(false);
+  }
+
+  function savePosition() {
+    const derived = derivePosition(form);
+    const qty = parseFloat(derived.qty) || 0;
+    const costBasis = parseFloat(derived.costBasis) || 0;
+    const currentPrice = parseFloat(derived.currentPrice) || 0;
+    // Validate: need at least name + 2 of (qty, costBasis, currentPrice/marketValue)
+    if (!derived.name) return;
+    const filledCount = [qty, costBasis, currentPrice].filter(v => v > 0).length;
+    if (filledCount < 2) { alert("Please fill at least 2 of: Quantity, Purchase Price, Current Price / Market Value"); return; }
+
+    const position = {
+      id: editingPosId || `pos_${Date.now()}`,
+      name: derived.name,
+      ticker: derived.ticker || "",
+      isin: derived.isin || "",
+      assetClass: derived.assetClass,
+      region: derived.region,
+      currency: derived.currency,
+      qty,
+      costBasis,
+      currentPrice: currentPrice || (qty ? parseFloat(derived.marketValue) / qty : 0),
+      purchaseDate: derived.purchaseDate || "",
+      notes: derived.notes || "",
+    };
+
+    setData(d => ({
+      ...d,
+      portfolios: d.portfolios.map(p => p.id === portfolio.id ? {
+        ...p,
+        positions: editingPosId
+          ? p.positions.map(x => x.id === editingPosId ? position : x)
+          : [...p.positions, position]
+      } : p)
+    }));
+    setAddingPos(false);
+    setEditingPosId(null);
+    setForm(EMPTY_POSITION);
+  }
+
+  function startEditPos(pos) {
+    setForm({ ...EMPTY_POSITION, ...pos, qty: String(pos.qty), costBasis: String(pos.costBasis), currentPrice: String(pos.currentPrice), marketValue: String(pos.qty * pos.currentPrice) });
+    setEditingPosId(pos.id);
+    setAddingPos(true);
+  }
+
+  function deletePos(posId) {
+    setData(d => ({ ...d, portfolios: d.portfolios.map(p => p.id === portfolio.id ? { ...p, positions: p.positions.filter(x => x.id !== posId) } : p) }));
+  }
+
+  function deletePortfolio() {
+    if (!confirm(`Delete portfolio "${portfolio.name}"?`)) return;
+    setData(d => ({ ...d, portfolios: d.portfolios.filter(p => p.id !== portfolio.id) }));
+  }
+
+  const F = (label, key, opts = {}) => (
+    <div>
+      <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>{label}{opts.required && <span style={{ color: C.accent }}> *</span>}</div>
+      {opts.options
+        ? <Sel value={form[key]} onChange={v => setForm(f => ({ ...f, [key]: v }))} options={opts.options} />
+        : <Inp value={form[key]} onChange={v => setForm(f => ({ ...f, [key]: v }))} placeholder={opts.placeholder || ""} type={opts.type || "text"} />
+      }
+    </div>
+  );
+
+  const totalMV = portfolio.positions.reduce((s, pos) => s + toHUF(pos.qty * pos.currentPrice, pos.currency), 0);
+  const totalCost = portfolio.positions.reduce((s, pos) => s + toHUF(pos.qty * pos.costBasis, pos.currency), 0);
+  const totalPnl = totalMV - totalCost;
+  const totalPnlPct = totalCost > 0 ? ((totalPnl / totalCost) * 100).toFixed(1) : "—";
+
+  return (
+    <Card>
+      {/* Portfolio header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        {editingPortfolio ? (
+          <div style={{ display: "flex", gap: 8, flex: 1, marginRight: 8 }}>
+            <Inp value={portfolioForm.name} onChange={v => setPortfolioForm(f => ({ ...f, name: v }))} placeholder="Portfolio name" style={{ flex: 1 }} />
+            <Inp value={portfolioForm.broker} onChange={v => setPortfolioForm(f => ({ ...f, broker: v }))} placeholder="Provider (IBKR, Erste…)" style={{ flex: 1 }} />
+            <Btn onClick={savePortfolioMeta} style={{ fontSize: 12 }}>Save</Btn>
+            <button onClick={() => setEditingPortfolio(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontWeight: 600 }}>{portfolio.name}</span>
+            {portfolio.broker && <Tag color={C.muted}>{portfolio.broker}</Tag>}
+            <span style={{ fontSize: 12, color: C.muted }}>{portfolio.positions.length} position{portfolio.positions.length !== 1 ? "s" : ""}</span>
+          </div>
+        )}
+        {!readonly && !editingPortfolio && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => setEditingPortfolio(true)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13 }}>✎</button>
+            <button onClick={deletePortfolio} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 15 }}>×</button>
+          </div>
+        )}
+      </div>
+
+      {/* Column headers */}
+      <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr auto", gap: 8, padding: "4px 0 8px", borderBottom: `1px solid ${C.border}` }}>
+        {["Position", "Qty × Price", "Market Value", "Cost Basis", "P&L", ""].map(h => (
+          <span key={h} style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
+        ))}
+      </div>
+
+      {/* Position rows */}
+      {portfolio.positions.map(pos => {
+        const marketVal = toHUF(pos.qty * pos.currentPrice, pos.currency);
+        const costVal = toHUF(pos.qty * pos.costBasis, pos.currency);
+        const pnl = marketVal - costVal;
+        const pnlPct = costVal > 0 ? ((pnl / costVal) * 100).toFixed(1) : "—";
+        const pnlColor = pnl >= 0 ? C.green : C.red;
+        const hasISIN = pos.isin;
+        const hasTicker = pos.ticker;
+        return (
+          <div key={pos.id} style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr auto", gap: 8, alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+            <div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 2 }}>
+                {hasTicker && <Tag color={C.blue}>{pos.ticker}</Tag>}
+                {hasISIN && <span style={{ fontSize: 10, color: C.muted, fontFamily: "monospace" }}>{pos.isin}</span>}
+                <span style={{ fontSize: 12, fontWeight: 500 }}>{pos.name}</span>
+              </div>
+              <div style={{ fontSize: 10, color: C.muted }}>{pos.assetClass} · {pos.region} · {pos.currency}{pos.purchaseDate ? ` · bought ${pos.purchaseDate}` : ""}</div>
+              {pos.notes && <div style={{ fontSize: 10, color: C.muted, fontStyle: "italic" }}>{pos.notes}</div>}
+            </div>
+            <span style={{ fontSize: 12, color: C.muted }}>{pos.qty} × {pos.currentPrice}</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{fmtHUF(marketVal)}</span>
+            <span style={{ fontSize: 12, color: C.muted }}>{costVal > 0 ? fmtHUF(costVal) : "—"}</span>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: pnlColor }}>{pnl >= 0 ? "+" : ""}{fmtHUF(pnl)}</div>
+              <div style={{ fontSize: 10, color: pnlColor }}>{pnl >= 0 ? "+" : ""}{pnlPct}%</div>
+            </div>
+            {!readonly && (
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => startEditPos(pos)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>✎</button>
+                <button onClick={() => deletePos(pos.id)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Totals row */}
+      {portfolio.positions.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr auto", gap: 8, padding: "10px 0 4px" }}>
+          <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Total</span>
+          <span />
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>{fmtHUF(totalMV)}</span>
+          <span style={{ fontSize: 12, color: C.muted }}>{fmtHUF(totalCost)}</span>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: totalPnl >= 0 ? C.green : C.red }}>{totalPnl >= 0 ? "+" : ""}{fmtHUF(totalPnl)}</div>
+            <div style={{ fontSize: 10, color: totalPnl >= 0 ? C.green : C.red }}>{totalPnl >= 0 ? "+" : ""}{totalPnlPct}%</div>
+          </div>
+          <span />
+        </div>
+      )}
+
+      {/* Add position form */}
+      {addingPos && !readonly && (
+        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginTop: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 12, color: C.accent }}>
+            {editingPosId ? "Edit position" : "Add position"}
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginLeft: 8 }}>Fill at least 2 of: Qty, Purchase Price, Current Price</span>
+          </div>
+
+          {/* Row 1: Identifiers */}
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+            {F("Asset Name *", "name", { required: true, placeholder: "e.g. iShares MSCI World" })}
+            {F("Ticker", "ticker", { placeholder: "e.g. IWDA" })}
+            {F("ISIN", "isin", { placeholder: "e.g. IE00B4L5Y983" })}
+            {F("Asset Class", "assetClass", { options: ["ETF", "Stock", "Bond", "Crypto", "Fund", "Other"] })}
+          </div>
+
+          {/* Row 2: Region */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 8, marginBottom: 8 }}>
+            {F("Region", "region", { options: ["Global", "EU", "US", "EM", "Asia", "Other"] })}
+            <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 1 }}>
+              <span style={{ fontSize: 11, color: C.muted }}>Ticker and ISIN are optional but recommended — they help identify the asset unambiguously.</span>
+            </div>
+          </div>
+
+          {/* Row 3: Quantities & prices */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+            {F("Quantity", "qty", { type: "number", placeholder: "# shares / units" })}
+            {F("Purchase Price", "costBasis", { type: "number", placeholder: "price paid per unit" })}
+            {F("Current Price", "currentPrice", { type: "number", placeholder: "price today per unit" })}
+            {F("Market Value", "marketValue", { type: "number", placeholder: "or total value today" })}
+            {F("Currency", "currency", { options: ["USD", "EUR", "HUF", "GBP", "CHF", "Other"] })}
+          </div>
+
+          {/* Row 4: Date + notes */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8, marginBottom: 12 }}>
+            {F("Purchase Date", "purchaseDate", { placeholder: "YYYY-MM-DD" })}
+            {F("Notes", "notes", { placeholder: "optional free text" })}
+          </div>
+
+          {/* Derived preview */}
+          {(() => {
+            const d = derivePosition(form);
+            const qty = parseFloat(d.qty) || 0;
+            const cp = parseFloat(d.currentPrice) || 0;
+            const cb = parseFloat(d.costBasis) || 0;
+            const mv = qty * cp;
+            const cost = qty * cb;
+            if (qty && cp) return (
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, padding: "6px 10px", background: C.surfaceHigh, borderRadius: 6 }}>
+                Preview: {qty} units × {cp} {form.currency} = <strong style={{ color: C.text }}>{fmtHUF(toHUF(mv, form.currency))}</strong>
+                {cb > 0 && <> · P&L: <strong style={{ color: mv > cost ? C.green : C.red }}>{mv > cost ? "+" : ""}{fmtHUF(toHUF(mv - cost, form.currency))}</strong></>}
+              </div>
+            );
+            return null;
+          })()}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={savePosition}>{editingPosId ? "Save changes" : "Add position"}</Btn>
+            <Btn variant="ghost" onClick={() => { setAddingPos(false); setEditingPosId(null); setForm(EMPTY_POSITION); }}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+
+      {/* Add position button */}
+      {!readonly && !addingPos && (
+        <button onClick={() => { setAddingPos(true); setEditingPosId(null); setForm(EMPTY_POSITION); }}
+          style={{ marginTop: 12, background: "none", border: `1px dashed ${C.border}`, borderRadius: 8, padding: "8px 16px", color: C.muted, cursor: "pointer", fontSize: 12, width: "100%" }}>
+          + Add position
+        </button>
+      )}
+    </Card>
+  );
+}
+
 // ─── Wealth Tab ───────────────────────────────────────────────────────────────
 // NW snapshot: call once on app load if current month not yet recorded
 function maybeSnapshotNW(data, setData) {
@@ -731,71 +995,20 @@ function Wealth({ data, setData, readonly }) {
 
       {/* ── Portfolio positions ── */}
       {data.portfolios.map(portfolio => (
-        <Card key={portfolio.id}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={{ fontWeight: 600 }}>{portfolio.name}</span>
-              <Tag color={C.muted}>{portfolio.broker}</Tag>
-            </div>
-            <span style={{ fontSize: 12, color: C.muted }}>
-              {portfolio.positions.length} position{portfolio.positions.length !== 1 ? "s" : ""}
-            </span>
-          </div>
-          {/* Column headers */}
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", gap: 8, padding: "4px 0 8px", borderBottom: `1px solid ${C.border}` }}>
-            {["Position","Qty × Price","Market Value","Cost","P&L"].map(h => (
-              <span key={h} style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
-            ))}
-          </div>
-          {portfolio.positions.map(pos => {
-            const marketVal = toHUF(pos.qty * pos.currentPrice, pos.currency);
-            const costVal = toHUF(pos.qty * pos.costBasis, pos.currency);
-            const pnl = marketVal - costVal;
-            const pnlPct = ((pnl / costVal) * 100).toFixed(1);
-            const pnlColor = pnl >= 0 ? C.green : C.red;
-            return (
-              <div key={pos.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", gap: 8, alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <Tag color={C.blue}>{pos.ticker}</Tag>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 500 }}>{pos.name}</div>
-                    <div style={{ fontSize: 10, color: C.muted }}>{pos.assetClass} · {pos.region}</div>
-                  </div>
-                </div>
-                <span style={{ fontSize: 12, color: C.muted }}>{pos.qty} × {pos.currentPrice} {pos.currency}</span>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{fmtHUF(marketVal)}</span>
-                <span style={{ fontSize: 12, color: C.muted }}>{fmtHUF(costVal)}</span>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: pnlColor }}>{pnl >= 0 ? "+" : ""}{fmtHUF(pnl)}</div>
-                  <div style={{ fontSize: 10, color: pnlColor }}>{pnl >= 0 ? "+" : ""}{pnlPct}%</div>
-                </div>
-              </div>
-            );
-          })}
-          {/* Portfolio total row */}
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", gap: 8, padding: "10px 0 0" }}>
-            <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Total</span>
-            <span />
-            <span style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>
-              {fmtHUF(portfolio.positions.reduce((s, pos) => s + toHUF(pos.qty * pos.currentPrice, pos.currency), 0))}
-            </span>
-            <span style={{ fontSize: 12, color: C.muted }}>
-              {fmtHUF(portfolio.positions.reduce((s, pos) => s + toHUF(pos.qty * pos.costBasis, pos.currency), 0))}
-            </span>
-            <div>
-              {(() => {
-                const mv = portfolio.positions.reduce((s, pos) => s + toHUF(pos.qty * pos.currentPrice, pos.currency), 0);
-                const cv = portfolio.positions.reduce((s, pos) => s + toHUF(pos.qty * pos.costBasis, pos.currency), 0);
-                const p = mv - cv; const pp = ((p / cv) * 100).toFixed(1);
-                return <>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: p >= 0 ? C.green : C.red }}>{p >= 0 ? "+" : ""}{fmtHUF(p)}</div>
-                  <div style={{ fontSize: 10, color: p >= 0 ? C.green : C.red }}>{p >= 0 ? "+" : ""}{pp}%</div>
-                </>;
-              })()}
-            </div>
-          </div>
-        </Card>
+        <PortfolioCard key={portfolio.id} portfolio={portfolio} data={data} setData={setData} readonly={readonly} />
       ))}
+
+      {/* Add new portfolio button */}
+      {!readonly && (
+        <button onClick={() => {
+          const name = prompt("Sub-portfolio name (e.g. IBKR, Erste, KBC):");
+          if (!name) return;
+          const broker = prompt("Provider / broker name:");
+          setData(d => ({ ...d, portfolios: [...d.portfolios, { id: `p_${Date.now()}`, name, broker: broker || "", currency: "USD", description: "", positions: [] }] }));
+        }} style={{ background: "none", border: `2px dashed ${C.border}`, borderRadius: 12, padding: 16, color: C.muted, cursor: "pointer", fontSize: 13, width: "100%", textAlign: "center" }}>
+          + Add sub-portfolio (IBKR, Erste, Revolut…)
+        </button>
+      )}
 
       {/* ── Real estate + cash ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -1162,7 +1375,11 @@ User types a financial entry like:
 Parse it, give a brief friendly confirmation, then output one IMPORT_BATCH block.
 
 ━━ MODE 3: FILE IMPORT ━━
-User sends spreadsheet/CSV content. Analyze the columns, detect file type (bank statement / IBKR export / bills list), parse ALL data rows (skip headers and empty rows), categorize each entry, then output one IMPORT_BATCH block.
+User sends spreadsheet/CSV content with a user-selected file type hint (bank_statement, investment_export, or cost_list). Parse ALL data rows (skip headers and empty rows), then output one IMPORT_BATCH block.
+- bank_statement → type "transactions" — parse date, description, debit/credit columns
+- investment_export → type "positions" — parse symbol/ticker, ISIN, quantity, price columns
+- cost_list → type "costs" — parse name, amount, frequency columns
+Tell the user how many rows you parsed before the batch.
 
 ━━ IMPORT_BATCH FORMAT ━━
 When you have data to import, output EXACTLY this block (no markdown, no extra text around it):
@@ -1182,7 +1399,15 @@ Cost item shape:
   - nextDue: 1st of next month if not stated
 
 Position item shape:
-{"ticker":"string","name":"string","qty":number,"costBasis":number,"currentPrice":number,"currency":"HUF"|"EUR"|"USD","assetClass":"ETF"|"Stock"|"Crypto"|"Bond","region":"Global"|"EU"|"US"|"EM"|"Other"}
+{"ticker":"string","isin":"string","name":"string","qty":number,"costBasis":number,"currentPrice":number,"currency":"USD"|"EUR"|"HUF"|"GBP"|"CHF","assetClass":"ETF"|"Stock"|"Bond"|"Crypto"|"Fund"|"Other","region":"Global"|"EU"|"US"|"EM"|"Asia"|"Other","purchaseDate":"YYYY-MM-DD"|"","sedol":"","cusip":"","bloomberg":"","notes":""}
+
+━━ FILE AUTO-DETECTION ━━
+When a file is attached, Claude identifies the type automatically:
+- Bank statement (OTP, Revolut, K&H, Erste etc): columns like date, description, debit/credit, balance → type "transactions"
+- Investment export (IBKR Activity Statement, broker export): columns like symbol, quantity, price, proceeds → type "positions"  
+- Cost/bill list: columns like name, amount, frequency → type "costs"
+- Mixed file: split into multiple IMPORT_BATCH blocks if needed, one per type
+Tell the user what you detected before the batch.
 
 ━━ BUDGET TARGET SUGGESTIONS ━━
 If the user asks to suggest budget targets (e.g. "suggest budgets", "what should my limits be"), analyze last 3 months of transaction data, compute average monthly spend per category, add a 10-15% buffer, and output:
@@ -1229,18 +1454,47 @@ function parseImportBatch(text) {
   } catch { return null; }
 }
 
+const FILE_TYPE_LABELS = {
+  bank_statement: "Bank statement",
+  investment_export: "Investment export",
+  cost_list: "Cost / bill list",
+};
+
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
 function AIChat({ data, setData, open, setOpen, readonly }) {
-  const [messages, setMessages] = useState([]);          // { role, content (display) }
-  const [history, setHistory] = useState([]);             // { role, content (full, for API) }
+  const [messages, setMessages] = useState([]);
+  const [history, setHistory] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [attachedFile, setAttachedFile] = useState(null); // { name, text }
-  const [pendingBatch, setPendingBatch] = useState(null); // { type, summary, items, checked[] }
+  const [minimized, setMinimized] = useState(false);
+  const [attachedFile, setAttachedFile] = useState(null);
+  const [fileType, setFileType] = useState(null); // "bank_statement"|"investment_export"|"cost_list"
+  const [pendingBatch, setPendingBatch] = useState(null);
   const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading, pendingBatch]);
+
+  // Minimized pill — shows last message, click to expand
+  if (!open) return (
+    <button onClick={() => setOpen(true)} title="Open AI Assistant"
+      style={{ position: "fixed", bottom: 28, right: 28, width: 52, height: 52, borderRadius: "50%", background: C.accent, border: "none", cursor: "pointer", fontSize: 22, color: "#000", fontWeight: 700, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", zIndex: 100 }}>✦</button>
+  );
+
+  if (minimized) return (
+    <div style={{ position: "fixed", bottom: 28, right: 28, zIndex: 100, display: "flex", alignItems: "center", gap: 8 }}>
+      <div onClick={() => setMinimized(false)}
+        style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 24, padding: "10px 16px", cursor: "pointer", boxShadow: "0 4px 20px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", gap: 10, maxWidth: 280 }}>
+        <span style={{ color: C.accent, fontWeight: 700, fontSize: 15, flexShrink: 0 }}>✦</span>
+        <span style={{ fontSize: 12, color: C.textSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {messages.length > 0 ? messages[messages.length - 1].content.slice(0, 60) : "PFA Assistant"}
+        </span>
+        {loading && <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>…</span>}
+      </div>
+      <button onClick={() => setOpen(false)}
+        style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, cursor: "pointer", color: C.muted, fontSize: 16, flexShrink: 0 }}>×</button>
+    </div>
+  );
 
   async function handleFileSelect(e) {
     const file = e.target.files?.[0];
@@ -1248,6 +1502,7 @@ function AIChat({ data, setData, open, setOpen, readonly }) {
     try {
       const text = await fileToText(file);
       setAttachedFile({ name: file.name, text });
+      setFileType(null); // reset type selection for each new file
     } catch (err) {
       setMessages(m => [...m, { role: "assistant", content: `⚠️ ${err.message}` }]);
     }
@@ -1256,16 +1511,16 @@ function AIChat({ data, setData, open, setOpen, readonly }) {
 
   async function send() {
     if ((!input.trim() && !attachedFile) || loading) return;
+    if (attachedFile && !fileType) return; // must select type before sending
 
-    // Build display content (what the user sees in the bubble)
     let displayContent = input.trim();
-    if (attachedFile) displayContent = (displayContent ? displayContent + "\n" : "") + `📎 ${attachedFile.name}`;
+    if (attachedFile) displayContent = (displayContent ? displayContent + "\n" : "") + `📎 ${attachedFile.name} [${FILE_TYPE_LABELS[fileType]}]`;
 
-    // Build API content (full file text goes here)
+    const fileTypeHint = fileType ? `\nFILE TYPE (user-selected): ${fileType} — parse accordingly and output the correct IMPORT_BATCH type.` : "";
     let apiContent = input.trim();
     if (attachedFile) {
       apiContent = (apiContent ? apiContent + "\n\n" : "") +
-        `FILE ATTACHED: ${attachedFile.name}\n\`\`\`\n${attachedFile.text.slice(0, 14000)}\n\`\`\``;
+        `FILE ATTACHED: ${attachedFile.name}${fileTypeHint}\n\`\`\`\n${attachedFile.text.slice(0, 14000)}\n\`\`\``;
     }
 
     const userApiMsg = { role: "user", content: apiContent };
@@ -1273,6 +1528,7 @@ function AIChat({ data, setData, open, setOpen, readonly }) {
     setHistory(h => [...h, userApiMsg]);
     setInput("");
     setAttachedFile(null);
+    setFileType(null);
     setLoading(true);
     setPendingBatch(null);
 
@@ -1391,7 +1647,12 @@ function AIChat({ data, setData, open, setOpen, readonly }) {
           <span style={{ fontWeight: 700, color: C.accent }}>✦ PFA Assistant</span>
           {readonly && <Tag color={C.orange}>Demo</Tag>}
         </div>
-        <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20, lineHeight: 1, padding: 0 }}>×</button>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button onClick={() => setMinimized(true)} title="Minimize"
+            style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 18, lineHeight: 1, padding: "0 4px" }}>−</button>
+          <button onClick={() => setOpen(false)} title="Close"
+            style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20, lineHeight: 1, padding: 0 }}>×</button>
+        </div>
       </div>
 
       {/* Messages */}
@@ -1520,11 +1781,32 @@ function AIChat({ data, setData, open, setOpen, readonly }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* File attachment preview */}
+      {/* File attachment + type selector */}
       {attachedFile && (
-        <div style={{ margin: "0 12px 4px", padding: "6px 10px", background: C.surfaceHigh, border: `1px solid ${C.accent}44`, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
-          <span style={{ fontSize: 12, color: C.accent }}>📎 {attachedFile.name}</span>
-          <button onClick={() => setAttachedFile(null)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14, padding: 0 }}>×</button>
+        <div style={{ margin: "0 12px 4px", background: C.surfaceHigh, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: "10px 12px", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: fileType ? 0 : 8 }}>
+            <span style={{ fontSize: 12, color: C.accent }}>📎 {attachedFile.name}</span>
+            <button onClick={() => { setAttachedFile(null); setFileType(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14, padding: 0 }}>×</button>
+          </div>
+          {!fileType && (
+            <div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>What type of file is this?</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {Object.entries(FILE_TYPE_LABELS).map(([key, label]) => (
+                  <button key={key} onClick={() => setFileType(key)}
+                    style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: "5px 10px", color: C.textSoft, fontSize: 11, cursor: "pointer", fontWeight: 500 }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {fileType && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+              <Tag color={C.accent}>{FILE_TYPE_LABELS[fileType]}</Tag>
+              <button onClick={() => setFileType(null)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 11 }}>change</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1547,7 +1829,7 @@ function AIChat({ data, setData, open, setOpen, readonly }) {
           onFocus={e => e.target.style.borderColor = C.accent}
           onBlur={e => e.target.style.borderColor = C.border}
         />
-        <Btn onClick={send} disabled={(!input.trim() && !attachedFile) || loading || readonly} style={{ flexShrink: 0 }}>
+        <Btn onClick={send} disabled={(!input.trim() && !attachedFile) || (attachedFile && !fileType) || loading || readonly} style={{ flexShrink: 0 }}>
           {loading ? "…" : "Send"}
         </Btn>
       </div>
