@@ -319,6 +319,7 @@ const UPLOAD_GUIDES = {
 };
 
 function FileUploadCard({ defaultType, onFileReady, readonly }) {
+  const [expanded, setExpanded] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [selectedType, setSelectedType] = useState(defaultType || null);
@@ -328,6 +329,7 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
     try {
       const text = await fileToText(file);
       onFileReady({ name: file.name, text }, selectedType || defaultType);
+      setExpanded(false);
     } catch (err) {
       alert(err.message);
     }
@@ -350,9 +352,27 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
 
   if (readonly) return null;
 
+  // Collapsed state — just a small bar
+  if (!expanded) {
+    return (
+      <div
+        onClick={() => setExpanded(true)}
+        style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", transition: "border-color 0.15s" }}
+        onMouseEnter={e => e.currentTarget.style.borderColor = guide?.color || C.accent}
+        onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
+        <span style={{ fontSize: 16 }}>{guide?.icon || "📂"}</span>
+        <span style={{ fontSize: 13, color: C.textSoft, fontWeight: 500 }}>
+          Import {guide?.label || "file"} — click to upload
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>CSV or Excel</span>
+        <span style={{ fontSize: 14, color: C.muted }}>›</span>
+      </div>
+    );
+  }
+
+  // Expanded state — full upload UI
   return (
     <Card style={{ padding: 0, overflow: "hidden" }}>
-      {/* Type selector — only show if no defaultType */}
       {!defaultType && (
         <div style={{ display: "flex", borderBottom: `1px solid ${C.border}` }}>
           {Object.entries(UPLOAD_GUIDES).map(([key, g]) => (
@@ -364,26 +384,25 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
           ))}
         </div>
       )}
-
       <div style={{ padding: 16 }}>
-        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {guide && <span style={{ fontSize: 18 }}>{guide.icon}</span>}
             <div>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>
-                {guide ? `Import ${guide.label}` : "Import File"}
-              </div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{guide ? `Import ${guide.label}` : "Import File"}</div>
               {guide && <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{guide.desc}</div>}
             </div>
           </div>
-          <button onClick={() => setShowGuide(g => !g)}
-            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 10px", color: C.muted, fontSize: 11, cursor: "pointer" }}>
-            {showGuide ? "Hide guide" : "What should my file contain?"}
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setShowGuide(g => !g)}
+              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 10px", color: C.muted, fontSize: 11, cursor: "pointer" }}>
+              {showGuide ? "Hide guide" : "What should my file contain?"}
+            </button>
+            <button onClick={() => setExpanded(false)}
+              style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+          </div>
         </div>
 
-        {/* Format guide */}
         {showGuide && guide && (
           <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>{guide.formats}</div>
@@ -410,7 +429,6 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
           </div>
         )}
 
-        {/* Drop zone */}
         <div
           onDragOver={e => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
@@ -418,25 +436,18 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
           onClick={() => (guide || defaultType) && fileInputRef.current?.click()}
           style={{
             border: `2px dashed ${dragging ? (guide?.color || C.accent) : C.border}`,
-            borderRadius: 10, padding: "24px 16px", textAlign: "center",
+            borderRadius: 10, padding: "20px 16px", textAlign: "center",
             cursor: (guide || defaultType) ? "pointer" : "default",
             background: dragging ? (guide?.color || C.accent) + "11" : "transparent",
             transition: "all 0.15s",
-            opacity: (!guide && !defaultType) ? 0.4 : 1,
           }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>📂</div>
+          <div style={{ fontSize: 24, marginBottom: 6 }}>📂</div>
           <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
-            {dragging ? "Drop to import" : "Upload file to import"}
+            {dragging ? "Drop to import" : "Drag & drop or click to browse"}
           </div>
-          <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
-            Drag & drop your file here, or click to browse
-          </div>
-          <div style={{ display: "inline-block", background: guide?.color || C.accent, color: "#000", borderRadius: 8, padding: "8px 20px", fontSize: 13, fontWeight: 600 }}>
+          <div style={{ display: "inline-block", background: guide?.color || C.accent, color: "#000", borderRadius: 8, padding: "7px 18px", fontSize: 13, fontWeight: 600, marginTop: 8 }}>
             Choose file (.csv or .xlsx)
           </div>
-          {!guide && !defaultType && (
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Select a file type above first</div>
-          )}
         </div>
         <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={onPick} style={{ display: "none" }} />
       </div>
@@ -1596,6 +1607,12 @@ Cost item shape:
 Position item shape:
 {"ticker":"string","isin":"string","name":"string","qty":number,"costBasis":number,"currentPrice":number,"currency":"USD"|"EUR"|"HUF"|"GBP"|"CHF","assetClass":"ETF"|"Stock"|"Bond"|"Crypto"|"Fund"|"Other","region":"Global"|"EU"|"US"|"EM"|"Asia"|"Other","purchaseDate":"YYYY-MM-DD"|"","sedol":"","cusip":"","bloomberg":"","notes":""}
 
+IMPORTANT: For positions, also include portfolioName and broker at the top level of the batch (not inside each item):
+IMPORT_BATCH:
+{"type":"positions","portfolioName":"TBSZ 2021 D","broker":"Erste","summary":"...","items":[...]}
+
+Extract portfolioName from the user's message (e.g. "this is TBSZ 2021 D at Erste" → portfolioName="TBSZ 2021 D", broker="Erste"). If not mentioned, use the account name from the file itself.
+
 ━━ FILE AUTO-DETECTION ━━
 When a file is attached, Claude identifies the type automatically:
 - Bank statement (OTP, Revolut, K&H, Erste etc): columns like date, description, debit/credit, balance → type "transactions"
@@ -1806,10 +1823,16 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
         const newPositions = selected.map(item => ({
           ...item, id: `pos_${Date.now()}_${Math.random().toString(36).slice(2)}`
         }));
-        if (d.portfolios.length === 0) {
-          return { ...d, portfolios: [{ id: "p_auto", name: "Imported Portfolio", broker: "", currency: "USD", description: "", positions: newPositions }] };
+        // Use portfolioName from batch if provided, else "Imported Portfolio"
+        const targetName = pendingBatch.portfolioName || "Imported Portfolio";
+        const targetBroker = pendingBatch.broker || "";
+        const existing = d.portfolios.find(p => p.name === targetName);
+        if (existing) {
+          // Append to existing portfolio with this name
+          return { ...d, portfolios: d.portfolios.map(p => p.name === targetName ? { ...p, positions: [...p.positions, ...newPositions] } : p) };
         }
-        return { ...d, portfolios: d.portfolios.map((p, i) => i === 0 ? { ...p, positions: [...p.positions, ...newPositions] } : p) };
+        // Create new named portfolio
+        return { ...d, portfolios: [...d.portfolios, { id: `p_${Date.now()}`, name: targetName, broker: targetBroker, currency: "USD", description: "", positions: newPositions }] };
       });
     } else if (pendingBatch.type === "budget_targets") {
       setData(d => {
