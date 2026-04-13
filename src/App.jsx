@@ -436,17 +436,17 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
           onClick={() => (guide || defaultType) && fileInputRef.current?.click()}
           style={{
             border: `2px dashed ${dragging ? (guide?.color || C.accent) : C.border}`,
-            borderRadius: 10, padding: "20px 16px", textAlign: "center",
+            borderRadius: 10, padding: "12px 16px", textAlign: "center",
             cursor: (guide || defaultType) ? "pointer" : "default",
             background: dragging ? (guide?.color || C.accent) + "11" : "transparent",
-            transition: "all 0.15s",
+            transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
           }}>
-          <div style={{ fontSize: 24, marginBottom: 6 }}>📂</div>
-          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
+          <span style={{ fontSize: 18 }}>📂</span>
+          <span style={{ fontSize: 13, color: C.muted }}>
             {dragging ? "Drop to import" : "Drag & drop or click to browse"}
-          </div>
-          <div style={{ display: "inline-block", background: guide?.color || C.accent, color: "#000", borderRadius: 8, padding: "7px 18px", fontSize: 13, fontWeight: 600, marginTop: 8 }}>
-            Choose file (.csv or .xlsx)
+          </span>
+          <div style={{ display: "inline-block", background: guide?.color || C.accent, color: "#000", borderRadius: 7, padding: "5px 14px", fontSize: 12, fontWeight: 600, flexShrink: 0 }}>
+            Choose file
           </div>
         </div>
         <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={onPick} style={{ display: "none" }} />
@@ -2113,11 +2113,18 @@ export default function App() {
     }
     if (row) { setHouseholdId(row.id); setDataRaw(row.data); }
   }
+  const [saveError, setSaveError] = useState(false);
+
   useEffect(() => {
     if (!householdId || isDemo) return;
     setSaving(true);
+    setSaveError(false);
     const t = setTimeout(async () => {
-      await supabase.from("households").update({ data, updated_at: new Date().toISOString() }).eq("id", householdId);
+      const { error } = await supabase.from("households").update({ data, updated_at: new Date().toISOString() }).eq("id", householdId);
+      if (error) {
+        console.error("Save failed:", error);
+        setSaveError(true);
+      }
       setSaving(false);
     }, 1000);
     return () => clearTimeout(t);
@@ -2152,6 +2159,7 @@ export default function App() {
         </nav>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           {saving && <span style={{ fontSize: 11, color: C.muted }}>Saving…</span>}
+          {saveError && <span style={{ fontSize: 11, color: C.red, cursor: "pointer" }} onClick={() => setSaveError(false)} title="Data may not have saved — check your connection">⚠ Save failed</span>}
           {isDemo
             ? <Btn variant="ghost" onClick={() => setIsDemo(false)} style={{ fontSize: 12 }}>← Sign in</Btn>
             : <Btn variant="ghost" onClick={signOut} style={{ fontSize: 12 }}>Sign out</Btn>}
