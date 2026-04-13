@@ -168,7 +168,7 @@ function Auth({ onLogin }) {
 }
 
 // ─── Costs Tab ────────────────────────────────────────────────────────────────
-function Costs({ data, setData, readonly }) {
+function Costs({ data, setData, readonly, onImport }) {
   const [form, setForm] = useState({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
   const [adding, setAdding] = useState(false);
   const totalHUF = data.costs.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
@@ -182,6 +182,7 @@ function Costs({ data, setData, readonly }) {
   const upcoming = [...data.costs].filter(c => c.nextDue).sort((a, b) => a.nextDue.localeCompare(b.nextDue)).slice(0, 5);
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <FileUploadCard defaultType="cost_list" onFileReady={onImport} readonly={readonly} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
         <Card><Stat label="Total Monthly" value={fmtHUF(totalHUF)} color={C.red} /></Card>
         <Card><Stat label="Recurring" value={data.costs.filter(c => c.type === "recurring").length} /></Card>
@@ -252,8 +253,199 @@ function Costs({ data, setData, readonly }) {
   );
 }
 
+// ─── File Upload Card ─────────────────────────────────────────────────────────
+const UPLOAD_GUIDES = {
+  bank_statement: {
+    label: "Bank Statement",
+    icon: "🏦",
+    color: C.blue,
+    desc: "Import transactions from your bank account export.",
+    formats: "CSV or Excel (.xlsx) exported from OTP, Revolut, Erste, K&H, Raiffeisen, etc.",
+    columns: [
+      { name: "Date", example: "2026-03-15 or 15/03/2026", required: true },
+      { name: "Description / Merchant", example: "LIDL 1234 BUDAPEST, Netflix, BKK", required: true },
+      { name: "Amount", example: "-8400 or 8400 (debit/credit)", required: true },
+      { name: "Currency", example: "HUF, EUR, USD", required: false },
+      { name: "Balance", example: "remaining balance — optional", required: false },
+    ],
+    tips: [
+      "OTP: Export from netbank → Movements → CSV",
+      "Revolut: Profile → Statements → Excel",
+      "Column names don't matter — Claude reads the data, not the headers",
+      "Categories are inferred from merchant names — you can correct them before importing",
+    ],
+  },
+  investment_export: {
+    label: "Investment Export",
+    icon: "📈",
+    color: C.green,
+    desc: "Import portfolio positions from your broker.",
+    formats: "CSV or Excel from Interactive Brokers, Erste, KBC, Erste Alapkezelő, etc.",
+    columns: [
+      { name: "Asset name", example: "iShares Core MSCI World ETF", required: true },
+      { name: "Ticker / Symbol", example: "IWDA, AAPL, BTC", required: false },
+      { name: "ISIN", example: "IE00B4L5Y983", required: false },
+      { name: "Quantity", example: "50", required: true },
+      { name: "Purchase price", example: "85.20", required: false },
+      { name: "Current price or market value", example: "98.50 or 4925", required: true },
+      { name: "Currency", example: "USD, EUR, HUF", required: false },
+    ],
+    tips: [
+      "IBKR: Reports → Statements → Activity → CSV",
+      "At least 2 of: quantity, purchase price, current price/market value are required",
+      "Ticker or ISIN helps identify the asset — include if available",
+      "Multiple sheets are supported — Claude reads all of them",
+    ],
+  },
+  cost_list: {
+    label: "Cost / Bill List",
+    icon: "🧾",
+    color: C.purple,
+    desc: "Import recurring bills or expenses from a spreadsheet.",
+    formats: "Any CSV or Excel with a list of costs.",
+    columns: [
+      { name: "Name", example: "Netflix, Rent, Gym membership", required: true },
+      { name: "Amount", example: "5, 180000, 12000", required: true },
+      { name: "Currency", example: "EUR, HUF", required: false },
+      { name: "Frequency", example: "monthly, quarterly, annual", required: false },
+      { name: "Category", example: "Entertainment, Housing, Health", required: false },
+    ],
+    tips: [
+      "Even a simple two-column list (Name, Amount) works",
+      "Frequency defaults to monthly if not specified",
+      "You can add notes in extra columns — Claude will include them",
+    ],
+  },
+};
+
+function FileUploadCard({ defaultType, onFileReady, readonly }) {
+  const [dragging, setDragging] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+  const [selectedType, setSelectedType] = useState(defaultType || null);
+  const fileInputRef = useRef(null);
+
+  async function processFile(file) {
+    try {
+      const text = await fileToText(file);
+      onFileReady({ name: file.name, text }, selectedType || defaultType);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) processFile(file);
+  }
+
+  function onPick(e) {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+    e.target.value = "";
+  }
+
+  const guide = UPLOAD_GUIDES[selectedType || defaultType];
+
+  if (readonly) return null;
+
+  return (
+    <Card style={{ padding: 0, overflow: "hidden" }}>
+      {/* Type selector — only show if no defaultType */}
+      {!defaultType && (
+        <div style={{ display: "flex", borderBottom: `1px solid ${C.border}` }}>
+          {Object.entries(UPLOAD_GUIDES).map(([key, g]) => (
+            <button key={key} onClick={() => setSelectedType(key)}
+              style={{ flex: 1, padding: "10px 8px", background: selectedType === key ? C.surfaceHigh : "transparent", border: "none", borderRight: `1px solid ${C.border}`, cursor: "pointer", fontSize: 12, color: selectedType === key ? g.color : C.muted, fontWeight: selectedType === key ? 600 : 400, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+              <span style={{ fontSize: 16 }}>{g.icon}</span>
+              <span>{g.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div style={{ padding: 16 }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {guide && <span style={{ fontSize: 18 }}>{guide.icon}</span>}
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>
+                {guide ? `Import ${guide.label}` : "Import File"}
+              </div>
+              {guide && <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{guide.desc}</div>}
+            </div>
+          </div>
+          <button onClick={() => setShowGuide(g => !g)}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 10px", color: C.muted, fontSize: 11, cursor: "pointer" }}>
+            {showGuide ? "Hide guide" : "What should my file contain?"}
+          </button>
+        </div>
+
+        {/* Format guide */}
+        {showGuide && guide && (
+          <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>{guide.formats}</div>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Expected columns</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {guide.columns.map(col => (
+                  <div key={col.name} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: col.required ? C.text : C.muted, minWidth: 140 }}>
+                      {col.name}{col.required && <span style={{ color: C.accent }}> *</span>}
+                    </span>
+                    <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>{col.example}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 6 }}>* required</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Tips</div>
+              {guide.tips.map((tip, i) => (
+                <div key={i} style={{ fontSize: 11, color: C.muted, marginBottom: 3 }}>· {tip}</div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Drop zone */}
+        <div
+          onDragOver={e => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+          onClick={() => (guide || defaultType) && fileInputRef.current?.click()}
+          style={{
+            border: `2px dashed ${dragging ? (guide?.color || C.accent) : C.border}`,
+            borderRadius: 10, padding: "24px 16px", textAlign: "center",
+            cursor: (guide || defaultType) ? "pointer" : "default",
+            background: dragging ? (guide?.color || C.accent) + "11" : "transparent",
+            transition: "all 0.15s",
+            opacity: (!guide && !defaultType) ? 0.4 : 1,
+          }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>📂</div>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
+            {dragging ? "Drop to import" : "Upload file to import"}
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+            Drag & drop your file here, or click to browse
+          </div>
+          <div style={{ display: "inline-block", background: guide?.color || C.accent, color: "#000", borderRadius: 8, padding: "8px 20px", fontSize: 13, fontWeight: 600 }}>
+            Choose file (.csv or .xlsx)
+          </div>
+          {!guide && !defaultType && (
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Select a file type above first</div>
+          )}
+        </div>
+        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={onPick} style={{ display: "none" }} />
+      </div>
+    </Card>
+  );
+}
+
 // ─── Cash Flow Tab ────────────────────────────────────────────────────────────
-function CashFlow({ data, setData, readonly }) {
+function CashFlow({ data, setData, readonly, onImport }) {
   const [form, setForm] = useState({ date: "", desc: "", amount: "", currency: "HUF", category: "Food", type: "expense", account: "OTP" });
   const [adding, setAdding] = useState(false);
   const income = data.transactions.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
@@ -267,6 +459,7 @@ function CashFlow({ data, setData, readonly }) {
   }
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <FileUploadCard defaultType="bank_statement" onFileReady={onImport} readonly={readonly} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
         <Card><Stat label="Income" value={fmtHUF(income)} color={C.green} /></Card>
         <Card><Stat label="Expenses" value={fmtHUF(expenses)} color={C.red} /></Card>
@@ -833,7 +1026,7 @@ function maybeSnapshotNW(data, setData) {
   }));
 }
 
-function Wealth({ data, setData, readonly }) {
+function Wealth({ data, setData, readonly, onImport }) {
   const allPositions = data.portfolios.flatMap(p =>
     p.positions.map(pos => ({ ...pos, portfolioName: p.name }))
   );
@@ -887,6 +1080,8 @@ function Wealth({ data, setData, readonly }) {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+
+      <FileUploadCard defaultType="investment_export" onFileReady={onImport} readonly={readonly} />
 
       {/* ── Stats row ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16 }}>
@@ -1461,19 +1656,28 @@ const FILE_TYPE_LABELS = {
 };
 
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
-function AIChat({ data, setData, open, setOpen, readonly }) {
+function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport }) {
   const [messages, setMessages] = useState([]);
   const [history, setHistory] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [attachedFile, setAttachedFile] = useState(null);
-  const [fileType, setFileType] = useState(null); // "bank_statement"|"investment_export"|"cost_list"
+  const [fileType, setFileType] = useState(null);
   const [pendingBatch, setPendingBatch] = useState(null);
   const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading, pendingBatch]);
+
+  // When a file arrives from a tab upload card, pre-load it
+  useEffect(() => {
+    if (!pendingImport) return;
+    setAttachedFile({ name: pendingImport.name, text: pendingImport.text });
+    setFileType(pendingImport.fileType);
+    setMinimized(false);
+    clearPendingImport?.();
+  }, [pendingImport]);
 
   // Minimized pill — shows last message, click to expand
   if (!open) return (
@@ -1719,7 +1923,13 @@ function AIChat({ data, setData, open, setOpen, readonly }) {
                     <div style={{ display: "flex", flex: 1, gap: 6, alignItems: "center", minWidth: 0, fontSize: 12 }}>
                       <span style={{ color: C.muted, flexShrink: 0, fontSize: 11 }}>{item.date}</span>
                       <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.desc}</span>
-                      <Tag color={item.type === "income" ? C.green : C.blue} >{item.category}</Tag>
+                      <select
+                        value={item.category}
+                        onChange={e => setPendingBatch(b => ({ ...b, items: b.items.map((it, i) => i === idx ? { ...it, category: e.target.value } : it) }))}
+                        onClick={e => e.stopPropagation()}
+                        style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 4px", color: C.text, fontSize: 11, outline: "none", cursor: "pointer" }}>
+                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
                       <span style={{ fontWeight: 600, flexShrink: 0, color: item.type === "income" ? C.green : C.red }}>
                         {item.type === "income" ? "+" : "−"}{fmtHUF(toHUF(Math.abs(item.amount), item.currency))}
                       </span>
@@ -1846,6 +2056,12 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [tab, setTab] = useState("costs");
   const [chatOpen, setChatOpen] = useState(false);
+  const [pendingImport, setPendingImport] = useState(null); // { name, text, fileType }
+
+  function handleImport(file, fileType) {
+    setPendingImport({ ...file, fileType });
+    setChatOpen(true);
+  }
   const [data, setDataRaw] = useState(EMPTY_DATA);
   const [householdId, setHouseholdId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1921,12 +2137,12 @@ export default function App() {
       </header>
 
       <main style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-        {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} />}
-        {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} />}
-        {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} />}
+        {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
+        {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
+        {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
       </main>
 
-      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} />
+      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} />
     </div>
   );
 }
