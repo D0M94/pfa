@@ -172,7 +172,11 @@ function Costs({ data, setData, readonly, onImport }) {
   const [form, setForm] = useState({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
   const [adding, setAdding] = useState(false);
   const totalHUF = data.costs.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
-  const pieData = CATEGORIES.map(cat => ({ name: cat, value: data.costs.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0) })).filter(d => d.value > 0);
+  // Pie: only expense categories (exclude Income)
+  const pieData = CATEGORIES
+    .filter(cat => cat !== "Income")
+    .map(cat => ({ name: cat, value: data.costs.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0) }))
+    .filter(d => d.value > 0);
   function addCost() {
     if (!form.name || !form.amount) return;
     setData(d => ({ ...d, costs: [...d.costs, { ...form, id: Date.now().toString(), amount: parseFloat(form.amount) }] }));
@@ -202,7 +206,7 @@ function Costs({ data, setData, readonly, onImport }) {
           {upcoming.map(c => (
             <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
               <div><div style={{ fontSize: 13 }}>{c.name}</div><div style={{ fontSize: 11, color: C.muted }}>{c.nextDue}</div></div>
-              <div style={{ fontWeight: 600, color: C.red }}>{fmtHUF(toHUF(c.amount, c.currency))}</div>
+              <div style={{ fontWeight: 600, color: C.red }}>−{fmtHUF(toHUF(c.amount, c.currency))}</div>
             </div>
           ))}
         </Card>
@@ -233,7 +237,7 @@ function Costs({ data, setData, readonly, onImport }) {
               <span style={{ fontSize: 13 }}>{c.name}</span>
             </div>
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <span style={{ color: C.red, fontWeight: 600 }}>{fmtHUF(toHUF(c.amount, c.currency))}</span>
+              <span style={{ color: C.red, fontWeight: 600 }}>−{fmtHUF(toHUF(c.amount, c.currency))}</span>
               <span style={{ fontSize: 11, color: C.muted }}>{c.frequency}</span>
               {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, costs: d.costs.filter(x => x.id !== c.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
             </div>
@@ -1660,10 +1664,21 @@ function parseImportBatch(text) {
   }
   if (end === -1) return null;
   try {
-    const parsed = JSON.parse(text.slice(jsonStart, end + 1));
+    const raw = text.slice(jsonStart, end + 1);
+    const parsed = JSON.parse(raw);
     if (!parsed.type || !Array.isArray(parsed.items)) return null;
     return parsed;
-  } catch { return null; }
+  } catch (e) {
+    // Try stripping markdown fences in case model wrapped it
+    try {
+      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenced) {
+        const parsed = JSON.parse(fenced[1].trim());
+        if (parsed.type && Array.isArray(parsed.items)) return parsed;
+      }
+    } catch {}
+    return null;
+  }
 }
 
 const FILE_TYPE_LABELS = {
@@ -1759,7 +1774,7 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 2000,
+          max_tokens: 4000,
           system: buildSystemPrompt(data, readonly, todayStr()),
           messages: [...history, userApiMsg]
         })
@@ -1859,11 +1874,6 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   }
 
   const batchColor = { transactions: C.blue, costs: C.purple, positions: C.green, budget_targets: C.accent, savings_goals: C.orange };
-
-  if (!open) return (
-    <button onClick={() => setOpen(true)} title="Open AI Assistant"
-      style={{ position: "fixed", bottom: 28, right: 28, width: 52, height: 52, borderRadius: "50%", background: C.accent, border: "none", cursor: "pointer", fontSize: 22, color: "#000", fontWeight: 700, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", zIndex: 100 }}>✦</button>
-  );
 
   return (
     <div style={{ position: "fixed", bottom: 28, right: 28, width: 430, height: 620, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, display: "flex", flexDirection: "column", zIndex: 100, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
