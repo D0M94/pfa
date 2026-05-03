@@ -64,7 +64,9 @@ async function fileToText(file) {
 // ─── Default Data ─────────────────────────────────────────────────────────────
 const EMPTY_DATA = {
   costs: [], transactions: [], portfolios: [], realEstate: [],
-  cashAccounts: [], budgetTargets: [], savingsGoals: [], netWorthHistory: []
+  cashAccounts: [], budgetTargets: [], savingsGoals: [], netWorthHistory: [],
+  merchantRules: [],    // [{ keyword, costId }]
+  dismissedMatches: []  // ["txnId:costId"] — user said "not the same"
 };
 
 const DEMO_DATA = {
@@ -172,11 +174,7 @@ function Costs({ data, setData, readonly, onImport }) {
   const [form, setForm] = useState({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
   const [adding, setAdding] = useState(false);
   const totalHUF = data.costs.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
-  // Pie: only expense categories (exclude Income)
-  const pieData = CATEGORIES
-    .filter(cat => cat !== "Income")
-    .map(cat => ({ name: cat, value: data.costs.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0) }))
-    .filter(d => d.value > 0);
+  const pieData = CATEGORIES.map(cat => ({ name: cat, value: data.costs.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0) })).filter(d => d.value > 0);
   function addCost() {
     if (!form.name || !form.amount) return;
     setData(d => ({ ...d, costs: [...d.costs, { ...form, id: Date.now().toString(), amount: parseFloat(form.amount) }] }));
@@ -206,7 +204,7 @@ function Costs({ data, setData, readonly, onImport }) {
           {upcoming.map(c => (
             <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
               <div><div style={{ fontSize: 13 }}>{c.name}</div><div style={{ fontSize: 11, color: C.muted }}>{c.nextDue}</div></div>
-              <div style={{ fontWeight: 600, color: C.red }}>−{fmtHUF(toHUF(c.amount, c.currency))}</div>
+              <div style={{ fontWeight: 600, color: C.red }}>{fmtHUF(toHUF(c.amount, c.currency))}</div>
             </div>
           ))}
         </Card>
@@ -237,7 +235,7 @@ function Costs({ data, setData, readonly, onImport }) {
               <span style={{ fontSize: 13 }}>{c.name}</span>
             </div>
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <span style={{ color: C.red, fontWeight: 600 }}>−{fmtHUF(toHUF(c.amount, c.currency))}</span>
+              <span style={{ color: C.red, fontWeight: 600 }}>{fmtHUF(toHUF(c.amount, c.currency))}</span>
               <span style={{ fontSize: 11, color: C.muted }}>{c.frequency}</span>
               {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, costs: d.costs.filter(x => x.id !== c.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
             </div>
@@ -459,26 +457,175 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
   );
 }
 
+// ─── Merchant Matching (name similarity only) ─────────────────────────────────
+function matchRecurringCost(txn, costs, merchantRules, dismissedMatches) {
+  if (txn.type !== "expense") return null;
+  const desc = (txn.desc || "").toLowerCase();
+  const dismissed = new Set(dismissedMatches || []);
+
+  // Check saved merchant rules first (exact keyword match)
+  for (const rule of (merchantRules || [])) {
+    if (desc.includes(rule.keyword.toLowerCase())) {
+      const cost = costs.find(c => c.id === rule.costId);
+      if (cost && !dismissed.has(`${txn.id}:${cost.id}`)) return cost;
+    }
+  }
+
+  // Fuzzy: any word (4+ chars) from bill name found in transaction desc
+  for (const cost of costs) {
+    if (cost.type !== "recurring") continue;
+    if (dismissed.has(`${txn.id}:${cost.id}`)) continue;
+    const words = cost.name.toLowerCase().split(/\s+/).filter(w => w.length >= 4);
+    if (words.some(w => desc.includes(w))) return cost;
+  }
+  return null;
+}
+
+// ─── Inline Transaction Edit Row ──────────────────────────────────────────────
+function TransactionEditRow({ txn, onSave, onCancel }) {
+  const [form, setForm] = useState({
+    date: txn.date, desc: txn.desc,
+    amount: String(Math.abs(txn.amount)),
+    currency: txn.currency, category: txn.category, type: txn.type,
+  });
+  function save() {
+    const amt = form.type === "expense" ? -Math.abs(parseFloat(form.amount)) : Math.abs(parseFloat(form.amount));
+    onSave({ ...txn, ...form, amount: amt });
+  }
+  return (
+    <div style={{ padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr 1fr", gap: 6, marginBottom: 6 }}>
+        <Inp value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} placeholder="YYYY-MM-DD" />
+        <Inp value={form.desc} onChange={v => setForm(f => ({ ...f, desc: v }))} placeholder="Description" />
+        <Inp value={form.amount} onChange={v => setForm(f => ({ ...f, amount: v }))} type="number" placeholder="Amount" />
+        <Sel value={form.currency} onChange={v => setForm(f => ({ ...f, currency: v }))} options={["HUF","EUR","USD"]} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 6 }}>
+        <Sel value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={CATEGORIES} />
+        <Sel value={form.type} onChange={v => setForm(f => ({ ...f, type: v }))} options={["expense","income"]} />
+        <Btn onClick={save} style={{ fontSize: 12 }}>✓ Save</Btn>
+        <Btn variant="ghost" onClick={onCancel} style={{ fontSize: 12 }}>Cancel</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ─── Mark as Recurring Dialog ─────────────────────────────────────────────────
+function MarkRecurringDialog({ txn, onSave, onClose }) {
+  const [name, setName] = useState(txn.desc.split(/\s+/).slice(0, 2).join(" "));
+  const [category, setCategory] = useState(txn.category || "Other");
+  const [frequency, setFrequency] = useState("monthly");
+  const [owner, setOwner] = useState("Joint");
+  const keyword = txn.desc.toLowerCase().split(/\s+/).find(w => w.length >= 4) || txn.desc.toLowerCase().slice(0, 6);
+
+  function save() {
+    onSave({ name, category, frequency, owner,
+      amount: Math.abs(txn.amount), currency: txn.currency,
+      type: "recurring", nextDue: "", notes: "", keyword,
+    });
+    onClose();
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}
+      onClick={onClose}>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24, width: 390 }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>↺ Save as Recurring Bill</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>
+          Future bank statements will automatically match this bill using the keyword <strong style={{ color: C.accent }}>"{keyword}"</strong>.
+        </div>
+        <div style={{ display: "grid", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Bill name</div>
+            <Inp value={name} onChange={setName} placeholder="e.g. Netflix" />
+          </div>
+          <div>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Category</div>
+            <Sel value={category} onChange={setCategory} options={CATEGORIES} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Frequency</div>
+              <Sel value={frequency} onChange={setFrequency} options={["monthly","quarterly","annual"]} />
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Owner</div>
+              <Sel value={owner} onChange={setOwner} options={["Joint","You","Wife"]} />
+            </div>
+          </div>
+          <div style={{ background: C.bg, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: C.muted }}>
+            Amount: <strong style={{ color: C.text }}>−{fmtHUF(toHUF(Math.abs(txn.amount), txn.currency))}</strong>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <Btn onClick={save} style={{ flex: 1 }}>✓ Save as recurring</Btn>
+          <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Cash Flow Tab ────────────────────────────────────────────────────────────
 function CashFlow({ data, setData, readonly, onImport }) {
   const [form, setForm] = useState({ date: "", desc: "", amount: "", currency: "HUF", category: "Food", type: "expense", account: "OTP" });
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [markingTxn, setMarkingTxn] = useState(null);
+
   const income = data.transactions.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
   const expenses = data.transactions.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
   const byCategory = CATEGORIES.map(cat => ({ name: cat, value: data.transactions.filter(t => t.category === cat && t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0) })).filter(d => d.value > 0);
+
   function addTransaction() {
     if (!form.date || !form.desc || !form.amount) return;
     const amt = form.type === "expense" ? -Math.abs(parseFloat(form.amount)) : Math.abs(parseFloat(form.amount));
     setData(d => ({ ...d, transactions: [{ ...form, id: Date.now().toString(), amount: amt }, ...d.transactions] }));
     setAdding(false);
   }
+
+  function saveEdit(updated) {
+    setData(d => ({ ...d, transactions: d.transactions.map(t => t.id === updated.id ? updated : t) }));
+    setEditingId(null);
+  }
+
+  function saveRecurring({ keyword, ...costFields }) {
+    const newCost = { ...costFields, id: `c_${Date.now()}` };
+    setData(d => ({
+      ...d,
+      costs: [...(d.costs || []), newCost],
+      merchantRules: [...(d.merchantRules || []), { keyword, costId: newCost.id }],
+    }));
+  }
+
+  function confirmMatch(txnId, costId) {
+    // Save as merchant rule so future imports auto-match
+    const txn = data.transactions.find(t => t.id === txnId);
+    const keyword = (txn?.desc || "").toLowerCase().split(/\s+/).find(w => w.length >= 4) || "";
+    setData(d => ({
+      ...d,
+      merchantRules: [...(d.merchantRules || []), { keyword, costId }],
+    }));
+  }
+
+  function dismissMatch(txnId, costId) {
+    setData(d => ({
+      ...d,
+      dismissedMatches: [...(d.dismissedMatches || []), `${txnId}:${costId}`],
+    }));
+  }
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <FileUploadCard defaultType="bank_statement" onFileReady={onImport} readonly={readonly} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-        <Card><Stat label="Income" value={fmtHUF(income)} color={C.green} /></Card>
-        <Card><Stat label="Expenses" value={fmtHUF(expenses)} color={C.red} /></Card>
-        <Card><Stat label="Net" value={fmtHUF(income - expenses)} color={income >= expenses ? C.green : C.red} /></Card>
+        <Card><Stat label="Income" value={`+${fmtHUF(income)}`} color={C.green} /></Card>
+        <Card><Stat label="Expenses" value={`−${fmtHUF(expenses)}`} color={C.red} /></Card>
+        <Card><Stat label="Net" value={`${income >= expenses ? "+" : "−"}${fmtHUF(Math.abs(income - expenses))}`} color={income >= expenses ? C.green : C.red} /></Card>
       </div>
       <Card>
         <div style={{ fontWeight: 600, marginBottom: 12 }}>Expense Breakdown</div>
@@ -493,9 +640,13 @@ function CashFlow({ data, setData, readonly, onImport }) {
       </Card>
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-          <div style={{ fontWeight: 600 }}>Transactions</div>
+          <div>
+            <div style={{ fontWeight: 600 }}>Transactions</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>✎ edit · ↺ mark as recurring</div>
+          </div>
           {!readonly && <Btn onClick={() => setAdding(!adding)}>{adding ? "Cancel" : "+ Add manually"}</Btn>}
         </div>
+
         {adding && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 16, padding: 16, background: C.surfaceHigh, borderRadius: 10 }}>
             <Inp value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} placeholder="Date (YYYY-MM-DD)" />
@@ -508,20 +659,79 @@ function CashFlow({ data, setData, readonly, onImport }) {
             <Btn onClick={addTransaction} style={{ gridColumn: "span 4" }}>Save</Btn>
           </div>
         )}
-        {data.transactions.map(t => (
-          <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.muted }}>{t.date}</span>
-              <Tag color={t.type === "income" ? C.green : C.red}>{t.category}</Tag>
-              <span style={{ fontSize: 13 }}>{t.desc}</span>
+
+        {data.transactions.map(t => {
+          const matched = matchRecurringCost(t, data.costs || [], data.merchantRules || [], data.dismissedMatches || []);
+          const isConfirmed = (data.merchantRules || []).some(r => {
+            const desc = t.desc.toLowerCase();
+            return desc.includes(r.keyword) && r.costId === matched?.id;
+          });
+
+          if (editingId === t.id) {
+            return <TransactionEditRow key={t.id} txn={t} onSave={saveEdit} onCancel={() => setEditingId(null)} />;
+          }
+
+          return (
+            <div key={t.id}>
+              {/* Main transaction row */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: matched && !isConfirmed ? "none" : `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
+                  <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{t.date}</span>
+                  <select value={t.category}
+                    onChange={e => setData(d => ({ ...d, transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: e.target.value } : x) }))}
+                    disabled={readonly}
+                    style={{ background: (t.type === "income" ? C.green : C.red) + "22", color: t.type === "income" ? C.green : C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
+                    {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                  <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</span>
+                  {isConfirmed && matched && (
+                    <span style={{ fontSize: 10, color: C.green, background: C.green + "22", borderRadius: 5, padding: "1px 6px", flexShrink: 0 }}>↺ {matched.name}</span>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                  <span style={{ fontWeight: 600, color: t.type === "income" ? C.green : C.red }}>
+                    {t.type === "expense" ? "−" : "+"}{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}
+                  </span>
+                  {!readonly && (
+                    <>
+                      <button onClick={() => setEditingId(t.id)} title="Edit"
+                        style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 7px", color: C.muted, cursor: "pointer", fontSize: 12 }}>✎</button>
+                      {t.type === "expense" && !isConfirmed && (
+                        <button onClick={() => setMarkingTxn(t)} title="Mark as recurring"
+                          style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 7px", color: C.muted, cursor: "pointer", fontSize: 12 }}>↺</button>
+                      )}
+                      <Btn variant="danger" onClick={() => setData(d => ({ ...d, transactions: d.transactions.filter(x => x.id !== t.id) }))} style={{ padding: "4px 10px" }}>×</Btn>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Inline match confirmation — only for unconfirmed fuzzy matches */}
+              {matched && !isConfirmed && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px 10px", borderBottom: `1px solid ${C.border}`, background: C.orange + "0a" }}>
+                  <span style={{ fontSize: 12, color: C.orange }}>↺</span>
+                  <span style={{ fontSize: 12, color: C.textSoft, flex: 1 }}>
+                    Is this your <strong style={{ color: C.text }}>{matched.name}</strong> bill?
+                  </span>
+                  <button onClick={() => confirmMatch(t.id, matched.id)}
+                    style={{ background: C.green + "22", border: `1px solid ${C.green}44`, borderRadius: 6, padding: "3px 10px", color: C.green, fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
+                    ✓ Yes
+                  </button>
+                  <button onClick={() => dismissMatch(t.id, matched.id)}
+                    style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px", color: C.muted, fontSize: 11, cursor: "pointer" }}>
+                    ✗ No
+                  </button>
+                </div>
+              )}
             </div>
-            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <span style={{ fontWeight: 600, color: t.type === "income" ? C.green : C.red }}>{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}</span>
-              {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, transactions: d.transactions.filter(x => x.id !== t.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </Card>
+
+      {/* Mark as recurring dialog */}
+      {markingTxn && (
+        <MarkRecurringDialog txn={markingTxn} onSave={saveRecurring} onClose={() => setMarkingTxn(null)} />
+      )}
 
       {/* ── Savings Goals ── */}
       <SavingsGoals data={data} setData={setData} readonly={readonly} />
@@ -1664,21 +1874,10 @@ function parseImportBatch(text) {
   }
   if (end === -1) return null;
   try {
-    const raw = text.slice(jsonStart, end + 1);
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(text.slice(jsonStart, end + 1));
     if (!parsed.type || !Array.isArray(parsed.items)) return null;
     return parsed;
-  } catch (e) {
-    // Try stripping markdown fences in case model wrapped it
-    try {
-      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (fenced) {
-        const parsed = JSON.parse(fenced[1].trim());
-        if (parsed.type && Array.isArray(parsed.items)) return parsed;
-      }
-    } catch {}
-    return null;
-  }
+  } catch { return null; }
 }
 
 const FILE_TYPE_LABELS = {
