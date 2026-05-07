@@ -23,7 +23,7 @@ const C = {
   purple: "#a07cf0", orange: "#f09a5a", muted: "#6b6b7e", text: "#e8e8f0", textSoft: "#a0a0b8",
 };
 
-const CATEGORIES = ["Housing","Food","Transport","Utilities","Health","Education","Entertainment","Savings","Income","Other"];
+const CATEGORIES = ["Housing","Food","Transport","Utilities","Health","Education","Entertainment","Savings","Income","Transfer","Other"];
 const PIE_COLORS = [C.blue, C.green, C.accent, C.purple, C.orange, C.red, C.muted, C.textSoft, C.blue, C.green];
 
 function toHUF(amount, currency) {
@@ -46,7 +46,76 @@ function loadXLSX() {
   });
 }
 
-// Convert uploaded file → plain CSV text for Claude to read
+// ─── Revolut CSV parser (client-side, no token limit) ────────────────────────
+// Detects Revolut's Hungarian export format and parses it directly
+function tryParseRevolutCSV(text) {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return null;
+  const header = lines[0].toLowerCase();
+  // Revolut Hungarian: Típus,Termék,Kezdés dátuma,Teljesítés dátuma,Leírás,Összeg,Díj,Pénznem,State,Egyenleg
+  // After encoding: tipus, termek, leiras, osszeg, penznem
+  if (!header.includes("leiras") && !header.includes("le\u00edr\u00e1s") &&
+      !header.includes("osszeg") && !header.includes("\u00f6sszeg") &&
+      !header.includes("penznem") && !header.includes("p\u00e9nznem")) return null;
+
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    // Parse CSV respecting quoted fields
+    const cols = [];
+    let cur = "", inQuote = false;
+    for (let j = 0; j < line.length; j++) {
+      if (line[j] === '"') { inQuote = !inQuote; }
+      else if (line[j] === ',' && !inQuote) { cols.push(cur.trim()); cur = ""; }
+      else cur += line[j];
+    }
+    cols.push(cur.trim());
+
+    // Columns: Típus(0), Termék(1), Kezdés(2), Teljesítés(3), Leírás(4), Összeg(5), Díj(6), Pénznem(7), State(8), Egyenleg(9)
+    if (cols.length < 6) continue;
+    const type = cols[0] || "";
+    const completionDate = cols[3] || cols[2] || "";
+    const desc = cols[4] || "";
+    const amountStr = cols[5] || "0";
+    const currency = cols[7] || "HUF";
+    const state = (cols[8] || "").toLowerCase();
+
+    if (state && !state.includes("elv") && !state.includes("completed") && !state.includes("done")) continue;
+
+    const amount = parseFloat(amountStr.replace(",", ".")) || 0;
+    if (amount === 0) continue;
+
+    // Parse date: "2026-01-10 12:34:56" → "2026-01-10"
+    const date = completionDate.split(" ")[0] || completionDate;
+
+    // Infer type
+    const isIncome = amount > 0;
+    const entryType = isIncome ? "income" : "expense";
+
+    // Infer category from description
+    const d = desc.toLowerCase();
+    let category = "Other";
+    if (d.includes("lidl") || d.includes("spar") || d.includes("aldi") || d.includes("tesco") || d.includes("penny") || d.includes("cba") || d.includes("kifli") || d.includes("yolo food") || d.includes("cityfood") || d.includes("vegafutar") || d.includes("obstermann") || d.includes("flekken") || d.includes("kebab") || d.includes("etterem") || d.includes("bisztro") || d.includes("pizza") || d.includes("kurtoskalacs") || d.includes("cukraszda") || d.includes("food") || d.includes("bundiner")) category = "Food";
+    else if (d.includes("gyogyszert") || d.includes("patika") || d.includes("pharmy") || d.includes("almapatika") || d.includes("szimpatika") || d.includes("pharmacy")) category = "Health";
+    else if (d.includes("mvm") || d.includes("dijnet") || d.includes("e.on") || d.includes("nmhh")) category = "Utilities";
+    else if (d.includes("omv") || d.includes("mol ") || d.includes("shell") || d.includes("bkk") || d.includes("vonat") || d.includes("mav")) category = "Transport";
+    else if (d.includes("netflix") || d.includes("spotify") || d.includes("tv2") || d.includes("mozi") || d.includes("arena") || d.includes("barion") || d.includes("steam")) category = "Entertainment";
+    else if (d.includes("atutala") || d.includes("átutalás") || d.includes("feltoltes") || d.includes("feltöltés") || d.includes("transfer")) category = "Transfer";
+    else if (d.includes("temu") || d.includes("emag") || d.includes("alza") || d.includes("sinsay") || d.includes("zooplus") || d.includes("vinted") || d.includes("tchibo") || d.includes("dm drog") || d.includes("h&h")) category = "Other";
+    else if (isIncome) category = "Income";
+
+    // Hungarian transfer types → Transfer category
+    if (type.toLowerCase().includes("tutala") || type.toLowerCase().includes("felto")) {
+      category = isIncome ? "Income" : "Transfer";
+    }
+
+    rows.push({ date, desc, amount, currency, category, type: entryType, account: "Revolut" });
+  }
+  return rows.length > 0 ? rows : null;
+}
+
+// Convert uploaded file → plain CSV text for Claude OR pre-parsed rows for known formats
 async function fileToText(file) {
   const ext = file.name.split(".").pop().toLowerCase();
   if (ext === "csv") return await file.text();
@@ -169,177 +238,44 @@ function Auth({ onLogin }) {
 
 // ─── Costs Tab ────────────────────────────────────────────────────────────────
 function Costs({ data, setData, readonly, onImport }) {
-  const now = new Date();
-  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const [viewMonth, setViewMonth] = useState(thisMonth);
   const [form, setForm] = useState({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
   const [adding, setAdding] = useState(false);
-  const [showAllUpcoming, setShowAllUpcoming] = useState(false);
-
-  const monthLabel = (() => {
-    const [y, m] = viewMonth.split("-").map(Number);
-    return new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
-  })();
-
-  function shiftMonth(delta) {
-    const [y, m] = viewMonth.split("-").map(Number);
-    const d = new Date(y, m - 1 + delta, 1);
-    const nm = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    if (nm <= thisMonth) setViewMonth(nm);
-  }
-
-  // Expense transactions for selected month from Cash Flow
-  const monthTxns = data.transactions.filter(t =>
-    t.type === "expense" && t.date?.startsWith(viewMonth)
-  );
-
-  // Recurring + one-time bills from data.costs
-  const recurringCosts = data.costs.filter(c => c.type === "recurring");
-  const onetimeCosts = data.costs.filter(c => c.type === "onetime");
-
-  const recurringHUF = recurringCosts.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
-  const onetimeHUF = onetimeCosts.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
-  const txnHUF = monthTxns.reduce((s, t) => s + toHUF(Math.abs(t.amount), t.currency), 0);
-  const totalHUF = recurringHUF + onetimeHUF + txnHUF;
-
-  // Chart 1 — donut: Recurring bills / One-time bills / Transactions
-  const splitData = [
-    { name: "Recurring bills", value: Math.round(recurringHUF) },
-    { name: "One-time bills", value: Math.round(onetimeHUF) },
-    { name: "Transactions", value: Math.round(txnHUF) },
-  ].filter(d => d.value > 0);
-  const splitColors = [C.blue, C.purple, C.red];
-
-  // Chart 2 — horizontal bar: by category (bills + transactions combined)
-  const catData = CATEGORIES
-    .filter(cat => cat !== "Income")
-    .map(cat => {
-      const fromCosts = data.costs.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
-      const fromTxns = monthTxns.filter(t => t.category === cat).reduce((s, t) => s + toHUF(Math.abs(t.amount), t.currency), 0);
-      return { name: cat, value: Math.round(fromCosts + fromTxns) };
-    })
-    .filter(d => d.value > 0)
-    .sort((a, b) => b.value - a.value);
-
-  // Upcoming due dates
-  const allUpcoming = [...data.costs].filter(c => c.nextDue).sort((a, b) => a.nextDue.localeCompare(b.nextDue));
-  const upcomingPreview = allUpcoming.slice(0, 3);
-
+  const totalHUF = data.costs.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
+  const pieData = CATEGORIES.map(cat => ({ name: cat, value: data.costs.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0) })).filter(d => d.value > 0);
   function addCost() {
     if (!form.name || !form.amount) return;
     setData(d => ({ ...d, costs: [...d.costs, { ...form, id: Date.now().toString(), amount: parseFloat(form.amount) }] }));
     setAdding(false);
     setForm({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
   }
-
+  const upcoming = [...data.costs].filter(c => c.nextDue).sort((a, b) => a.nextDue.localeCompare(b.nextDue)).slice(0, 5);
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <FileUploadCard defaultType="cost_list" onFileReady={onImport} readonly={readonly} />
-
-      {/* Month picker + stats */}
-      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
-        <Card style={{ padding: "14px 16px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, minWidth: 150 }}>
-          <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>Month</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <button onClick={() => shiftMonth(-1)}
-              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", color: C.muted, cursor: "pointer", fontSize: 14 }}>‹</button>
-            <span style={{ fontWeight: 700, fontSize: 13, color: C.text, whiteSpace: "nowrap" }}>{monthLabel}</span>
-            <button onClick={() => shiftMonth(1)} disabled={viewMonth >= thisMonth}
-              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", color: viewMonth >= thisMonth ? C.border : C.muted, cursor: viewMonth >= thisMonth ? "default" : "pointer", fontSize: 14 }}>›</button>
-          </div>
-          {viewMonth === thisMonth && <div style={{ fontSize: 10, color: C.accent }}>current month</div>}
-        </Card>
-        <Card><Stat label="Total Costs" value={`−${fmtHUF(totalHUF)}`} color={C.red} /></Card>
-        <Card><Stat label="Recurring Bills" value={`−${fmtHUF(recurringHUF)}`} color={C.blue} /></Card>
-        <Card><Stat label={`${monthLabel} Transactions`} value={`−${fmtHUF(txnHUF)}`} color={C.purple} /></Card>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+        <Card><Stat label="Total Monthly" value={fmtHUF(totalHUF)} color={C.red} /></Card>
+        <Card><Stat label="Recurring" value={data.costs.filter(c => c.type === "recurring").length} /></Card>
+        <Card><Stat label="One-time" value={data.costs.filter(c => c.type === "onetime").length} /></Card>
       </div>
-
-      {/* Charts */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Card>
-          <div style={{ fontWeight: 600, marginBottom: 2 }}>Recurring vs One-time</div>
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Bills + {monthLabel} transactions</div>
-          {splitData.length === 0
-            ? <div style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "40px 0" }}>No data</div>
-            : <ResponsiveContainer width="100%" height={180}>
-                <PieChart>
-                  <Pie data={splitData} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={70} innerRadius={36}>
-                    {splitData.map((_, i) => <Cell key={i} fill={splitColors[i]} />)}
-                  </Pie>
-                  <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
-                  <Legend layout="vertical" align="right" verticalAlign="middle" wrapperStyle={{ fontSize: 11, color: C.muted }} />
-                </PieChart>
-              </ResponsiveContainer>
-          }
+          <div style={{ fontWeight: 600, marginBottom: 12 }}>By Category</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart><Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}>
+              {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+            </Pie><Tooltip formatter={v => fmtHUF(v)} /></PieChart>
+          </ResponsiveContainer>
         </Card>
         <Card>
-          <div style={{ fontWeight: 600, marginBottom: 2 }}>By Category</div>
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Bills + {monthLabel} transactions combined</div>
-          {catData.length === 0
-            ? <div style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "40px 0" }}>No data</div>
-            : <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={catData} layout="vertical" margin={{ left: 0, right: 16, top: 0, bottom: 0 }}>
-                  <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} width={85} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
-                  <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                    {catData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-          }
+          <div style={{ fontWeight: 600, marginBottom: 12 }}>Upcoming Due Dates</div>
+          {upcoming.map(c => (
+            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
+              <div><div style={{ fontSize: 13 }}>{c.name}</div><div style={{ fontSize: 11, color: C.muted }}>{c.nextDue}</div></div>
+              <div style={{ fontWeight: 600, color: C.red }}>{fmtHUF(toHUF(c.amount, c.currency))}</div>
+            </div>
+          ))}
         </Card>
       </div>
-
-      {/* Upcoming — compact 3, modal for rest */}
-      <Card style={{ padding: "14px 20px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: upcomingPreview.length > 0 ? 10 : 0 }}>
-          <div style={{ fontWeight: 600 }}>Upcoming Due Dates</div>
-          {allUpcoming.length > 3 && (
-            <button onClick={() => setShowAllUpcoming(true)}
-              style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
-              View all {allUpcoming.length} →
-            </button>
-          )}
-        </div>
-        {upcomingPreview.length === 0
-          ? <div style={{ fontSize: 12, color: C.muted }}>No upcoming due dates</div>
-          : <div style={{ display: "flex", gap: 10 }}>
-              {upcomingPreview.map(c => (
-                <div key={c.id} style={{ flex: 1, background: C.bg, borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.border}` }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{c.name}</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{c.nextDue}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.red }}>−{fmtHUF(toHUF(c.amount, c.currency))}</div>
-                </div>
-              ))}
-            </div>
-        }
-      </Card>
-
-      {/* Upcoming modal */}
-      {showAllUpcoming && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={() => setShowAllUpcoming(false)}>
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, width: 420, maxHeight: "70vh", overflowY: "auto" }}
-            onClick={e => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 15 }}>All Upcoming Due Dates</div>
-              <button onClick={() => setShowAllUpcoming(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>×</button>
-            </div>
-            {allUpcoming.map(c => (
-              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div>
-                  <div style={{ fontSize: 11, color: C.muted }}>{c.nextDue} · {c.frequency}</div>
-                </div>
-                <div style={{ fontWeight: 600, color: C.red }}>−{fmtHUF(toHUF(c.amount, c.currency))}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* All Costs list — bills + month transactions */}
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontWeight: 600 }}>All Costs</div>
@@ -358,63 +294,20 @@ function Costs({ data, setData, readonly, onImport }) {
             <Btn onClick={addCost} style={{ gridColumn: "span 4" }}>Save</Btn>
           </div>
         )}
-
-        {data.costs.length === 0 && monthTxns.length === 0 && (
-          <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "24px 0" }}>
-            No costs yet. Import a bank statement in Cash Flow or add bills manually.
-          </div>
-        )}
-
-        {/* Bills section */}
-        {data.costs.length > 0 && (
-          <>
-            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, marginTop: 4 }}>Recurring &amp; One-time Bills</div>
-            {data.costs.map(c => (
-              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <select value={c.category}
-                    onChange={e => setData(d => ({ ...d, costs: d.costs.map(x => x.id === c.id ? { ...x, category: e.target.value } : x) }))}
-                    disabled={readonly}
-                    style={{ background: C.blue + "22", color: C.blue, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none" }}>
-                    {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                  </select>
-                  <Tag color={C.muted}>{c.type}</Tag>
-                  <span style={{ fontSize: 13 }}>{c.name}</span>
-                </div>
-                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                  <span style={{ color: C.red, fontWeight: 600 }}>−{fmtHUF(toHUF(c.amount, c.currency))}</span>
-                  <span style={{ fontSize: 11, color: C.muted }}>{c.frequency}</span>
-                  {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, costs: d.costs.filter(x => x.id !== c.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-
-        {/* Transactions section — expense outflows from Cash Flow */}
-        {monthTxns.length > 0 && (
-          <>
-            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, marginTop: 14 }}>
-              Outflows from Cash Flow — {monthLabel}
-              <span style={{ fontSize: 10, color: C.muted, textTransform: "none", letterSpacing: 0, marginLeft: 6 }}>(edit in Cash Flow tab)</span>
+        {data.costs.map(c => (
+          <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <Tag color={C.blue}>{c.category}</Tag>
+              <Tag color={C.muted}>{c.owner}</Tag>
+              <span style={{ fontSize: 13 }}>{c.name}</span>
             </div>
-            {monthTxns.map(t => (
-              <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{t.date}</span>
-                  <select value={t.category}
-                    onChange={e => setData(d => ({ ...d, transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: e.target.value } : x) }))}
-                    disabled={readonly}
-                    style={{ background: C.red + "22", color: C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none" }}>
-                    {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                  </select>
-                  <span style={{ fontSize: 13 }}>{t.desc}</span>
-                </div>
-                <span style={{ fontWeight: 600, color: C.red }}>−{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}</span>
-              </div>
-            ))}
-          </>
-        )}
+            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <span style={{ color: C.red, fontWeight: 600 }}>{fmtHUF(toHUF(c.amount, c.currency))}</span>
+              <span style={{ fontSize: 11, color: C.muted }}>{c.frequency}</span>
+              {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, costs: d.costs.filter(x => x.id !== c.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
+            </div>
+          </div>
+        ))}
       </Card>
 
       {/* ── Budget section ── */}
@@ -1811,13 +1704,16 @@ IMPORT_BATCH:
 {"type":"savings_goals","summary":"New savings goal","items":[{"name":"string","targetAmount":number,"currentAmount":number,"monthlyContribution":number,"currency":"HUF"|"EUR"|"USD","targetDate":"YYYY-MM-DD"|"","notes":"string"}]}
 
 ━━ CATEGORY INFERENCE ━━
-Lidl/Aldi/Spar/Tesco/Penny/market/zöldséges → Food
-BKK/Volán/MÁV/Uber/Bolt/taxi/fuel/MOL/Shell → Transport
-Netflix/Spotify/Steam/HBO/cinema/mozi → Entertainment
-Doctor/orvos/pharmacy/patika/gyógyszer → Health
-Electricity/áram/gas/gáz/internet/water/víz → Utilities
+Lidl/Aldi/Spar/Tesco/Penny/market/zöldséges/Food → Food
+BKK/Volán/MÁV/Uber/Bolt/taxi/fuel/MOL/Shell/OMV → Transport
+Netflix/Spotify/Steam/HBO/cinema/mozi/TV2 → Entertainment
+Doctor/orvos/pharmacy/patika/gyógyszer/gyógyszertár → Health
+Electricity/áram/MVM/gas/gáz/Díjnet/internet/water/víz → Utilities
 Rent/lakbér/albérlet/mortgage/jelzálog → Housing
 Salary/fizetés/bér/dividend → Income (type=income, amount positive)
+Átutalás/transfer/utalás between accounts → Transfer
+Feltöltés/top-up/refill → Income
+Return/visszatérítés → Income (positive amount)
 Default → Other
 `}`;
 }
@@ -1898,8 +1794,27 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
     if (!file) return;
     try {
       const text = await fileToText(file);
+
+      // Try Revolut direct parse first — bypasses Claude token limits
+      if (file.name.toLowerCase().includes("revolut") || file.name.toLowerCase().includes("extract")) {
+        const rows = tryParseRevolutCSV(text);
+        if (rows && rows.length > 0) {
+          setMessages(m => [...m, { role: "user", content: `📎 ${file.name} [Bank statement]` }]);
+          setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${rows.length} transactions directly. Review and confirm below.` }]);
+          setPendingBatch({
+            type: "transactions",
+            summary: `${rows.length} transactions from ${file.name}`,
+            items: rows,
+            checked: rows.map(() => true),
+          });
+          e.target.value = "";
+          return;
+        }
+      }
+
+      // Fall back to Claude for other file types
       setAttachedFile({ name: file.name, text });
-      setFileType(null); // reset type selection for each new file
+      setFileType(null);
     } catch (err) {
       setMessages(m => [...m, { role: "assistant", content: `⚠️ ${err.message}` }]);
     }
