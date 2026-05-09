@@ -24,7 +24,7 @@ const C = {
 };
 
 const CATEGORIES = ["Housing","Food","Transport","Utilities","Health","Education","Entertainment","Savings","Income","Transfer","Other"];
-const PIE_COLORS = [C.blue, C.green, C.accent, C.purple, C.orange, C.red, C.muted, C.textSoft, C.blue, C.green];
+const PIE_COLORS = [C.blue, C.green, C.accent, C.purple, C.orange, C.red, C.muted, C.textSoft, C.blue, C.green, C.blue];
 
 function toHUF(amount, currency) {
   if (currency === "EUR") return amount * EUR_HUF;
@@ -46,76 +46,67 @@ function loadXLSX() {
   });
 }
 
-// ─── Revolut CSV parser (client-side, no token limit) ────────────────────────
-// Detects Revolut's Hungarian export format and parses it directly
+// ─── Revolut CSV parser (client-side, bypasses Claude token limits) ───────────
 function tryParseRevolutCSV(text) {
-  const lines = text.trim().split("\n");
+  const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return null;
-  const header = lines[0].toLowerCase();
-  // Revolut Hungarian: Típus,Termék,Kezdés dátuma,Teljesítés dátuma,Leírás,Összeg,Díj,Pénznem,State,Egyenleg
-  // After encoding: tipus, termek, leiras, osszeg, penznem
-  if (!header.includes("leiras") && !header.includes("le\u00edr\u00e1s") &&
-      !header.includes("osszeg") && !header.includes("\u00f6sszeg") &&
-      !header.includes("penznem") && !header.includes("p\u00e9nznem")) return null;
 
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    // Parse CSV respecting quoted fields
-    const cols = [];
-    let cur = "", inQuote = false;
+  function parseCSVLine(line) {
+    const cols = []; let cur = '', inQuote = false;
     for (let j = 0; j < line.length; j++) {
-      if (line[j] === '"') { inQuote = !inQuote; }
-      else if (line[j] === ',' && !inQuote) { cols.push(cur.trim()); cur = ""; }
+      if (line[j] === '"') inQuote = !inQuote;
+      else if (line[j] === ',' && !inQuote) { cols.push(cur.trim()); cur = ''; }
       else cur += line[j];
     }
-    cols.push(cur.trim());
+    cols.push(cur.trim()); return cols;
+  }
 
-    // Columns: Típus(0), Termék(1), Kezdés(2), Teljesítés(3), Leírás(4), Összeg(5), Díj(6), Pénznem(7), State(8), Egyenleg(9)
-    if (cols.length < 6) continue;
-    const type = cols[0] || "";
-    const completionDate = cols[3] || cols[2] || "";
-    const desc = cols[4] || "";
-    const amountStr = cols[5] || "0";
-    const currency = cols[7] || "HUF";
-    const state = (cols[8] || "").toLowerCase();
+  const headerStr = parseCSVLine(lines[0]).join(',').toLowerCase();
+  // Detection: Revolut HU export always has "state" and "egyenleg" columns
+  // These ASCII words survive encoding corruption unlike Hungarian accented words
+  if (!headerStr.includes('state') || !headerStr.includes('egyenleg')) return null;
+  if (!text.includes(',HUF,') && !text.includes(',EUR,') && !text.includes(',USD,')) return null;
 
-    if (state && !state.includes("elv") && !state.includes("completed") && !state.includes("done")) continue;
+  // Columns: 0=type 1=product 2=start 3=completion 4=desc 5=amount 6=fee 7=currency 8=state 9=balance
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i].trim());
+    if (cols.length < 8) continue;
+    const txType = (cols[0] || '').toLowerCase();
+    const date = (cols[3] || cols[2] || '').split(' ')[0];
+    const desc = cols[4] || '';
+    const amount = parseFloat((cols[5] || '0').replace(',', '.'));
+    const currency = cols[7] || 'HUF';
+    const state = (cols[8] || '').toLowerCase();
 
-    const amount = parseFloat(amountStr.replace(",", ".")) || 0;
-    if (amount === 0) continue;
+    if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) continue;
+    if (isNaN(amount) || amount === 0) continue;
+    // Skip non-completed: state contains 'elv' (elvégezve=completed) or 'complet'
+    if (state && !state.includes('elv') && !state.includes('complet')) continue;
 
-    // Parse date: "2026-01-10 12:34:56" → "2026-01-10"
-    const date = completionDate.split(" ")[0] || completionDate;
-
-    // Infer type
     const isIncome = amount > 0;
-    const entryType = isIncome ? "income" : "expense";
-
-    // Infer category from description
+    const entryType = isIncome ? 'income' : 'expense';
     const d = desc.toLowerCase();
-    let category = "Other";
-    if (d.includes("lidl") || d.includes("spar") || d.includes("aldi") || d.includes("tesco") || d.includes("penny") || d.includes("cba") || d.includes("kifli") || d.includes("yolo food") || d.includes("cityfood") || d.includes("vegafutar") || d.includes("obstermann") || d.includes("flekken") || d.includes("kebab") || d.includes("etterem") || d.includes("bisztro") || d.includes("pizza") || d.includes("kurtoskalacs") || d.includes("cukraszda") || d.includes("food") || d.includes("bundiner")) category = "Food";
-    else if (d.includes("gyogyszert") || d.includes("patika") || d.includes("pharmy") || d.includes("almapatika") || d.includes("szimpatika") || d.includes("pharmacy")) category = "Health";
-    else if (d.includes("mvm") || d.includes("dijnet") || d.includes("e.on") || d.includes("nmhh")) category = "Utilities";
-    else if (d.includes("omv") || d.includes("mol ") || d.includes("shell") || d.includes("bkk") || d.includes("vonat") || d.includes("mav")) category = "Transport";
-    else if (d.includes("netflix") || d.includes("spotify") || d.includes("tv2") || d.includes("mozi") || d.includes("arena") || d.includes("barion") || d.includes("steam")) category = "Entertainment";
-    else if (d.includes("atutala") || d.includes("átutalás") || d.includes("feltoltes") || d.includes("feltöltés") || d.includes("transfer")) category = "Transfer";
-    else if (d.includes("temu") || d.includes("emag") || d.includes("alza") || d.includes("sinsay") || d.includes("zooplus") || d.includes("vinted") || d.includes("tchibo") || d.includes("dm drog") || d.includes("h&h")) category = "Other";
-    else if (isIncome) category = "Income";
 
-    // Hungarian transfer types → Transfer category
-    if (type.toLowerCase().includes("tutala") || type.toLowerCase().includes("felto")) {
-      category = isIncome ? "Income" : "Transfer";
-    }
+    let category = 'Other';
+    if (/lidl|spar|aldi|tesco|penny|cba|yolo food|cityfood|vegafutar|obstermann|flekken|kebab|bisztro|pizza|kurtoskalacs|cukraszda|bundiner|kifli|sprintpizza|balena|ichigo|tifliso|burger/i.test(d)) category = 'Food';
+    else if (/patika|pharmy|pharmacy|almapatika|szimpatika|pingvin|gyogyszer/i.test(d)) category = 'Health';
+    else if (/mvm|dijnet|d.jnet|e\.on|nmhh/i.test(d)) category = 'Utilities';
+    else if (/omv|mol |shell|bkk|vonat|mav|bp\.|parking|parkl/i.test(d)) category = 'Transport';
+    else if (/netflix|spotify|tv2|arena|steam|barion|mozi|cinema/i.test(d)) category = 'Entertainment';
+    else if (/temu|emag|alza|sinsay|zooplus|vinted|tchibo|dm drog|yoyoso|tea\.hu|de agostini/i.test(d)) category = 'Other';
+    // Transfer detection via transaction type column (garbled but "tual" survives from "átutalás")
+    else if (/tual|transfer|utal/i.test(txType)) category = isIncome ? 'Income' : 'Transfer';
+    else if (/lt|felto|top.up|feltolt/i.test(txType) && isIncome) category = 'Income';
+    else if (/visszat|refund|return/i.test(txType) && isIncome) category = 'Income';
+    else if (isIncome) category = 'Income';
 
-    rows.push({ date, desc, amount, currency, category, type: entryType, account: "Revolut" });
+    rows.push({ date, desc, amount, currency, category, type: entryType, account: 'Revolut' });
   }
   return rows.length > 0 ? rows : null;
 }
 
-// Convert uploaded file → plain CSV text for Claude OR pre-parsed rows for known formats
+// Convert uploaded file → plain text for Claude (or pre-parsed for known formats)
 async function fileToText(file) {
   const ext = file.name.split(".").pop().toLowerCase();
   if (ext === "csv") return await file.text();
@@ -133,7 +124,8 @@ async function fileToText(file) {
 // ─── Default Data ─────────────────────────────────────────────────────────────
 const EMPTY_DATA = {
   costs: [], transactions: [], portfolios: [], realEstate: [],
-  cashAccounts: [], budgetTargets: [], savingsGoals: [], netWorthHistory: []
+  cashAccounts: [], budgetTargets: [], savingsGoals: [], netWorthHistory: [],
+  merchantRules: [], dismissedMatches: []
 };
 
 const DEMO_DATA = {
@@ -397,7 +389,13 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
   async function processFile(file) {
     try {
       const text = await fileToText(file);
-      onFileReady({ name: file.name, text }, selectedType || defaultType);
+      // Try Revolut direct parse first
+      const revRows = tryParseRevolutCSV(text);
+      if (revRows && revRows.length > 0) {
+        onFileReady({ name: file.name, text, preParseResult: { type: "transactions", items: revRows } }, selectedType || defaultType);
+      } else {
+        onFileReady({ name: file.name, text }, selectedType || defaultType);
+      }
       setExpanded(false);
     } catch (err) {
       alert(err.message);
@@ -526,39 +524,116 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
 
 // ─── Cash Flow Tab ────────────────────────────────────────────────────────────
 function CashFlow({ data, setData, readonly, onImport }) {
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [viewMonth, setViewMonth] = useState(thisMonth);
   const [form, setForm] = useState({ date: "", desc: "", amount: "", currency: "HUF", category: "Food", type: "expense", account: "OTP" });
   const [adding, setAdding] = useState(false);
-  const income = data.transactions.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
-  const expenses = data.transactions.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
-  const byCategory = CATEGORIES.map(cat => ({ name: cat, value: data.transactions.filter(t => t.category === cat && t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0) })).filter(d => d.value > 0);
+
+  const monthLabel = (() => {
+    const [y, m] = viewMonth.split("-").map(Number);
+    return new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
+  })();
+
+  // Get all months that have transactions, sorted descending
+  const allMonths = [...new Set(data.transactions.map(t => t.date?.slice(0, 7)).filter(Boolean))].sort().reverse();
+
+  function shiftMonth(delta) {
+    const idx = allMonths.indexOf(viewMonth);
+    const next = allMonths[idx - delta]; // reversed array so -1 = newer
+    if (next) setViewMonth(next);
+  }
+
+  const monthTxns = data.transactions.filter(t => t.date?.startsWith(viewMonth));
+  const income = monthTxns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+  const expenses = monthTxns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+  const net = income - expenses;
+
+  // Monthly summary bar chart — all months
+  const monthlySummary = [...allMonths].reverse().map(ym => {
+    const txns = data.transactions.filter(t => t.date?.startsWith(ym));
+    const inc = txns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+    const exp = txns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+    const [y, m] = ym.split("-").map(Number);
+    return { month: new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "short", year: "2-digit" }), income: Math.round(inc), expenses: Math.round(exp), net: Math.round(inc - exp) };
+  });
+
+  const byCategory = CATEGORIES.map(cat => ({
+    name: cat,
+    value: monthTxns.filter(t => t.category === cat && t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0)
+  })).filter(d => d.value > 0);
+
   function addTransaction() {
     if (!form.date || !form.desc || !form.amount) return;
     const amt = form.type === "expense" ? -Math.abs(parseFloat(form.amount)) : Math.abs(parseFloat(form.amount));
     setData(d => ({ ...d, transactions: [{ ...form, id: Date.now().toString(), amount: amt }, ...d.transactions] }));
     setAdding(false);
   }
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <FileUploadCard defaultType="bank_statement" onFileReady={onImport} readonly={readonly} />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-        <Card><Stat label="Income" value={fmtHUF(income)} color={C.green} /></Card>
-        <Card><Stat label="Expenses" value={fmtHUF(expenses)} color={C.red} /></Card>
-        <Card><Stat label="Net" value={fmtHUF(income - expenses)} color={income >= expenses ? C.green : C.red} /></Card>
+
+      {/* Monthly overview chart */}
+      {monthlySummary.length > 0 && (
+        <Card>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Monthly Overview</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>Income vs expenses across all months</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={monthlySummary} barGap={2}>
+              <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v/1000)}k`} width={40} />
+              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12, color: C.muted }} />
+              <Bar dataKey="income" name="Income" fill={C.green} radius={[3,3,0,0]} />
+              <Bar dataKey="expenses" name="Expenses" fill={C.red} radius={[3,3,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Month picker + stat cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
+        <Card style={{ padding: "14px 16px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, minWidth: 150 }}>
+          <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>Month</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => shiftMonth(-1)} disabled={allMonths.indexOf(viewMonth) >= allMonths.length - 1}
+              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", color: C.muted, cursor: "pointer", fontSize: 14 }}>‹</button>
+            <span style={{ fontWeight: 700, fontSize: 13, color: C.text, whiteSpace: "nowrap" }}>{monthLabel}</span>
+            <button onClick={() => shiftMonth(1)} disabled={allMonths.indexOf(viewMonth) <= 0}
+              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", color: C.muted, cursor: "pointer", fontSize: 14 }}>›</button>
+          </div>
+          {viewMonth === thisMonth && <div style={{ fontSize: 10, color: C.accent }}>current month</div>}
+        </Card>
+        <Card><Stat label="Income" value={`+${fmtHUF(income)}`} color={C.green} /></Card>
+        <Card><Stat label="Expenses" value={`−${fmtHUF(expenses)}`} color={C.red} /></Card>
+        <Card><Stat label="Net" value={`${net >= 0 ? "+" : "−"}${fmtHUF(Math.abs(net))}`} color={net >= 0 ? C.green : C.red} /></Card>
       </div>
-      <Card>
-        <div style={{ fontWeight: 600, marginBottom: 12 }}>Expense Breakdown</div>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={byCategory}>
-            <XAxis dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} />
-            <YAxis tick={{ fill: C.muted, fontSize: 11 }} />
-            <Tooltip formatter={v => fmtHUF(v)} />
-            <Bar dataKey="value" fill={C.blue} radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
+
+      {/* Category breakdown for selected month */}
+      {byCategory.length > 0 && (
+        <Card>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Expense Breakdown — {monthLabel}</div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 16 }}>
+              <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} tickFormatter={v => `${Math.round(v/1000)}k`} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} width={90} axisLine={false} tickLine={false} />
+              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Bar dataKey="value" radius={[0,4,4,0]}>
+                {byCategory.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Transaction list for selected month */}
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-          <div style={{ fontWeight: 600 }}>Transactions</div>
+          <div>
+            <div style={{ fontWeight: 600 }}>Transactions — {monthLabel}</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{monthTxns.length} entries</div>
+          </div>
           {!readonly && <Btn onClick={() => setAdding(!adding)}>{adding ? "Cancel" : "+ Add manually"}</Btn>}
         </div>
         {adding && (
@@ -573,15 +648,28 @@ function CashFlow({ data, setData, readonly, onImport }) {
             <Btn onClick={addTransaction} style={{ gridColumn: "span 4" }}>Save</Btn>
           </div>
         )}
-        {data.transactions.map(t => (
+        {monthTxns.length === 0 && (
+          <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "24px 0" }}>
+            No transactions for {monthLabel}.<br />
+            <span style={{ fontSize: 12 }}>Upload a bank statement or add manually.</span>
+          </div>
+        )}
+        {monthTxns.map(t => (
           <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.muted }}>{t.date}</span>
-              <Tag color={t.type === "income" ? C.green : C.red}>{t.category}</Tag>
-              <span style={{ fontSize: 13 }}>{t.desc}</span>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+              <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{t.date}</span>
+              <select value={t.category}
+                onChange={e => setData(d => ({ ...d, transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: e.target.value } : x) }))}
+                disabled={readonly}
+                style={{ background: (t.type === "income" ? C.green : C.red) + "22", color: t.type === "income" ? C.green : C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
+                {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+              <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</span>
             </div>
-            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <span style={{ fontWeight: 600, color: t.type === "income" ? C.green : C.red }}>{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}</span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+              <span style={{ fontWeight: 600, color: t.type === "income" ? C.green : C.red }}>
+                {t.type === "expense" ? "−" : "+"}{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}
+              </span>
               {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, transactions: d.transactions.filter(x => x.id !== t.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
             </div>
           </div>
@@ -1704,7 +1792,7 @@ IMPORT_BATCH:
 {"type":"savings_goals","summary":"New savings goal","items":[{"name":"string","targetAmount":number,"currentAmount":number,"monthlyContribution":number,"currency":"HUF"|"EUR"|"USD","targetDate":"YYYY-MM-DD"|"","notes":"string"}]}
 
 ━━ CATEGORY INFERENCE ━━
-Lidl/Aldi/Spar/Tesco/Penny/market/zöldséges/Food → Food
+Lidl/Aldi/Spar/Tesco/Penny/market/zöldséges → Food
 BKK/Volán/MÁV/Uber/Bolt/taxi/fuel/MOL/Shell/OMV → Transport
 Netflix/Spotify/Steam/HBO/cinema/mozi/TV2 → Entertainment
 Doctor/orvos/pharmacy/patika/gyógyszer/gyógyszertár → Health
@@ -1712,8 +1800,7 @@ Electricity/áram/MVM/gas/gáz/Díjnet/internet/water/víz → Utilities
 Rent/lakbér/albérlet/mortgage/jelzálog → Housing
 Salary/fizetés/bér/dividend → Income (type=income, amount positive)
 Átutalás/transfer/utalás between accounts → Transfer
-Feltöltés/top-up/refill → Income
-Return/visszatérítés → Income (positive amount)
+Feltöltés/top-up → Income
 Default → Other
 `}`;
 }
@@ -1762,6 +1849,15 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   // When a file arrives from a tab upload card, pre-load it
   useEffect(() => {
     if (!pendingImport) return;
+    // If the tab upload card pre-parsed the file (e.g. Revolut), show batch directly
+    if (pendingImport.preParseResult) {
+      const { type, items } = pendingImport.preParseResult;
+      setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${items.length} transactions directly. Review and confirm below.` }]);
+      setPendingBatch({ type, summary: `${items.length} transactions from ${pendingImport.name}`, items, checked: items.map(() => true) });
+      setMinimized(false);
+      clearPendingImport?.();
+      return;
+    }
     setAttachedFile({ name: pendingImport.name, text: pendingImport.text });
     setFileType(pendingImport.fileType);
     setMinimized(false);
@@ -1795,24 +1891,17 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
     try {
       const text = await fileToText(file);
 
-      // Try Revolut direct parse first — bypasses Claude token limits
-      if (file.name.toLowerCase().includes("revolut") || file.name.toLowerCase().includes("extract")) {
-        const rows = tryParseRevolutCSV(text);
-        if (rows && rows.length > 0) {
-          setMessages(m => [...m, { role: "user", content: `📎 ${file.name} [Bank statement]` }]);
-          setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${rows.length} transactions directly. Review and confirm below.` }]);
-          setPendingBatch({
-            type: "transactions",
-            summary: `${rows.length} transactions from ${file.name}`,
-            items: rows,
-            checked: rows.map(() => true),
-          });
-          e.target.value = "";
-          return;
-        }
+      // Try Revolut direct parse — bypasses Claude token limits entirely
+      const revRows = tryParseRevolutCSV(text);
+      if (revRows && revRows.length > 0) {
+        setMessages(m => [...m, { role: "user", content: `📎 ${file.name} [Bank statement]` }]);
+        setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${revRows.length} transactions directly. Review and confirm below.` }]);
+        setPendingBatch({ type: "transactions", summary: `${revRows.length} transactions from ${file.name}`, items: revRows, checked: revRows.map(() => true) });
+        e.target.value = "";
+        return;
       }
 
-      // Fall back to Claude for other file types
+      // Fall back to Claude for other formats
       setAttachedFile({ name: file.name, text });
       setFileType(null);
     } catch (err) {
@@ -2253,7 +2342,7 @@ export default function App() {
         </div>
       </header>
 
-      <main style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+      <main style={{ padding: "24px clamp(16px, 3vw, 48px)", maxWidth: "min(1600px, 96vw)", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
         {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
         {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
         {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
