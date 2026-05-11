@@ -24,7 +24,7 @@ const C = {
 };
 
 const CATEGORIES = ["Housing","Food","Transport","Utilities","Health","Education","Entertainment","Clothing","Garden","Savings","Income","Transfer","Other"];
-const PIE_COLORS = [C.blue, C.green, C.accent, C.purple, C.orange, C.red, C.muted, C.textSoft, "#f0a5c0", C.blue, C.green, C.orange, C.muted];
+const PIE_COLORS = [C.blue, C.green, C.accent, C.purple, C.orange, C.red, C.muted, C.textSoft, "#e87ca0", "#7acc7a", C.blue, C.orange, C.muted];
 
 function toHUF(amount, currency) {
   if (currency === "EUR") return amount * EUR_HUF;
@@ -47,41 +47,35 @@ function loadXLSX() {
 }
 
 // ─── Adaptive categorization ──────────────────────────────────────────────────
-// Build a keyword→category map from past transactions the user has corrected
-// "LIDL 1234 BUDAPEST" → user changed to Food → saves "lidl"→Food
+// Build keyword→category map from saved rules + existing transaction history
 function buildLearnedRules(transactions, merchantRules) {
   const rules = {};
-  // Saved merchant rules take highest priority
+  // Explicit saved rules take priority
   for (const r of (merchantRules || [])) {
     if (r.keyword && r.category) rules[r.keyword.toLowerCase()] = r.category;
   }
-  // Learn from existing transactions — most frequent category per merchant keyword
+  // Learn from existing transactions (most frequent category per keyword)
   const freq = {};
-  for (const t of transactions) {
-    const words = (t.desc || "").toLowerCase().split(/\s+/).filter(w => w.length >= 4);
+  for (const t of (transactions || [])) {
+    const words = (t.desc || "").toLowerCase().split(/[\s,.\-/]+/).filter(w => w.length >= 4);
     for (const w of words) {
       if (!freq[w]) freq[w] = {};
       freq[w][t.category] = (freq[w][t.category] || 0) + 1;
     }
   }
   for (const [word, cats] of Object.entries(freq)) {
-    if (!rules[word]) { // don't override explicit rules
-      rules[word] = Object.entries(cats).sort((a, b) => b[1] - a[1])[0][0];
-    }
+    if (!rules[word]) rules[word] = Object.entries(cats).sort((a, b) => b[1] - a[1])[0][0];
   }
   return rules;
 }
 
-// Apply learned rules to infer category for a description
-function inferCategory(desc, learnedRules, fallback = "Other") {
-  const words = (desc || "").toLowerCase().split(/\s+/).filter(w => w.length >= 4);
-  for (const word of words) {
-    if (learnedRules[word]) return learnedRules[word];
-  }
-  return fallback;
+function inferCategory(desc, learnedRules) {
+  const words = (desc || "").toLowerCase().split(/[\s,.\-/]+/).filter(w => w.length >= 4);
+  for (const w of words) { if (learnedRules[w]) return learnedRules[w]; }
+  return null;
 }
 
-// ─── Revolut CSV parser (client-side, bypasses Claude token limits) ───────────
+// ─── Revolut CSV parser (client-side, no token limits) ────────────────────────
 function tryParseRevolutCSV(text, learnedRules = {}) {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return null;
@@ -97,10 +91,11 @@ function tryParseRevolutCSV(text, learnedRules = {}) {
   }
 
   const headerStr = parseCSVLine(lines[0]).join(',').toLowerCase();
-  // Detection: Revolut HU export always has "state" and "egyenleg" columns (ASCII, survive encoding)
+  // Detection: "state" and "egyenleg" are ASCII and survive encoding corruption
   if (!headerStr.includes('state') || !headerStr.includes('egyenleg')) return null;
   if (!text.includes(',HUF,') && !text.includes(',EUR,') && !text.includes(',USD,')) return null;
 
+  // Columns: 0=type 1=product 2=start 3=completion 4=desc 5=amount 6=fee 7=currency 8=state 9=balance
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i].trim());
@@ -114,27 +109,30 @@ function tryParseRevolutCSV(text, learnedRules = {}) {
 
     if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) continue;
     if (isNaN(amount) || amount === 0) continue;
+    // Only completed: state contains 'elv' (elvégezve) or 'complet'
     if (state && !state.includes('elv') && !state.includes('complet')) continue;
 
     const isIncome = amount > 0;
     const entryType = isIncome ? 'income' : 'expense';
     const d = desc.toLowerCase();
 
-    // 1. Check learned rules first (adaptive)
+    // 1. Learned rules first
     let category = inferCategory(desc, learnedRules);
 
-    // 2. Fall back to hard-coded rules for common merchants
-    if (category === "Other") {
-      if (/lidl|spar|aldi|tesco|penny|cba|yolo food|cityfood|vegafutar|obstermann|flekken|kebab|bisztro|pizza|kurtoskalacs|cukraszda|bundiner|kifli|balena|ichigo|burger/i.test(d)) category = 'Food';
+    // 2. Hard-coded fallbacks (ASCII merchant names survive encoding)
+    if (!category) {
+      if (/lidl|spar|aldi|tesco|penny|cba|yolo food|cityfood|vegafutar|obstermann|flekken|kebab|bisztro|pizza|kurtoskalacs|cukraszda|bundiner|kifli|balena|ichigo|burger|restau/i.test(d)) category = 'Food';
       else if (/patika|pharmy|pharmacy|pingvin|gyogyszer/i.test(d)) category = 'Health';
       else if (/mvm|dijnet|e\.on|nmhh/i.test(d)) category = 'Utilities';
-      else if (/omv|mol |shell|bkk|vonat|mav|parking/i.test(d)) category = 'Transport';
+      else if (/omv|mol |shell|bkk|vonat|mav|parking|bolt taxi|uber/i.test(d)) category = 'Transport';
       else if (/netflix|spotify|tv2|arena|steam|mozi|cinema/i.test(d)) category = 'Entertainment';
-      else if (/zara|h&m|sinsay|pepco|reserved|vinted|deichmann|tshirt|ruha/i.test(d)) category = 'Clothing';
-      else if (/hornbach|obi|bauhaus|leroy|kerteszet|garden|novenyek/i.test(d)) category = 'Garden';
-      else if (/temu|emag|alza|zooplus|tchibo|dm drog|yoyoso/i.test(d)) category = 'Other';
-      else if (/tual|transfer|utal/i.test(txType)) category = isIncome ? 'Income' : 'Transfer';
+      else if (/zara|h&m|sinsay|pepco|reserved|vinted|deichmann|tshirt/i.test(d)) category = 'Clothing';
+      else if (/hornbach|obi|bauhaus|leroy|kerteszet|garden/i.test(d)) category = 'Garden';
+      else if (/temu|emag|alza|zooplus|tchibo/i.test(d)) category = 'Other';
+      // Transfer detection via type column ('tual' survives from 'átutalás')
+      else if (/tual|transfer/i.test(txType)) category = isIncome ? 'Income' : 'Transfer';
       else if (isIncome) category = 'Income';
+      else category = 'Other';
     }
 
     rows.push({ date, desc, amount, currency, category, type: entryType, account: 'Revolut' });
@@ -142,7 +140,7 @@ function tryParseRevolutCSV(text, learnedRules = {}) {
   return rows.length > 0 ? rows : null;
 }
 
-// Convert uploaded file → text for Claude or pre-parsed rows for known formats
+// Convert uploaded file → plain CSV text for Claude to read
 async function fileToText(file) {
   const ext = file.name.split(".").pop().toLowerCase();
   if (ext === "csv") return await file.text();
@@ -161,8 +159,7 @@ async function fileToText(file) {
 const EMPTY_DATA = {
   costs: [], transactions: [], portfolios: [], realEstate: [],
   cashAccounts: [], budgetTargets: [], savingsGoals: [], netWorthHistory: [],
-  merchantRules: [],   // [{ keyword, category }] — learned from user corrections
-  dismissedMatches: [] // ["txnId:costId"]
+  merchantRules: [] // { keyword, category } — learned from user corrections
 };
 
 const DEMO_DATA = {
@@ -265,50 +262,147 @@ function Auth({ onLogin }) {
   );
 }
 
+// ─── Month Picker helper ──────────────────────────────────────────────────────
+function MonthPicker({ viewMonth, setViewMonth, thisMonth }) {
+  const [y, m] = viewMonth.split("-").map(Number);
+  const label = new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
+  function shift(delta) {
+    const d = new Date(y, m - 1 + delta, 1);
+    const nm = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    if (nm <= thisMonth) setViewMonth(nm);
+  }
+  return (
+    <Card style={{ padding: "12px 16px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 150 }}>
+      <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>Month</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => shift(-1)} style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", color: C.muted, cursor: "pointer", fontSize: 14 }}>‹</button>
+        <span style={{ fontWeight: 700, fontSize: 13, color: C.text, whiteSpace: "nowrap" }}>{label}</span>
+        <button onClick={() => shift(1)} disabled={viewMonth >= thisMonth}
+          style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", color: viewMonth >= thisMonth ? C.border : C.muted, cursor: viewMonth >= thisMonth ? "default" : "pointer", fontSize: 14 }}>›</button>
+      </div>
+      {viewMonth === thisMonth && <div style={{ fontSize: 10, color: C.accent }}>current month</div>}
+    </Card>
+  );
+}
+
 // ─── Costs Tab ────────────────────────────────────────────────────────────────
 function Costs({ data, setData, readonly, onImport }) {
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [viewMonth, setViewMonth] = useState(thisMonth);
   const [form, setForm] = useState({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
   const [adding, setAdding] = useState(false);
-  const totalHUF = data.costs.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
-  const pieData = CATEGORIES.map(cat => ({ name: cat, value: data.costs.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0) })).filter(d => d.value > 0);
+  const [showAllUpcoming, setShowAllUpcoming] = useState(false);
+
+  // Expense transactions for selected month (from CashFlow data)
+  const monthTxns = data.transactions.filter(t =>
+    t.type === "expense" && t.date?.startsWith(viewMonth)
+  );
+
+  // Recurring bills (always shown — they don't have dates so shown regardless of month)
+  const bills = data.costs;
+
+  // Totals
+  const billsHUF = bills.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
+  const txnHUF = monthTxns.reduce((s, t) => s + toHUF(Math.abs(t.amount), t.currency), 0);
+  const totalHUF = billsHUF + txnHUF;
+
+  // Pie: all costs combined by category
+  const pieData = CATEGORIES.filter(cat => cat !== "Income").map(cat => {
+    const fromBills = bills.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
+    const fromTxns = monthTxns.filter(t => t.category === cat).reduce((s, t) => s + toHUF(Math.abs(t.amount), t.currency), 0);
+    return { name: cat, value: Math.round(fromBills + fromTxns) };
+  }).filter(d => d.value > 0);
+
+  // Upcoming due dates
+  const allUpcoming = [...bills].filter(c => c.nextDue).sort((a, b) => a.nextDue.localeCompare(b.nextDue));
+  const upcomingPreview = allUpcoming.slice(0, 3);
+
   function addCost() {
     if (!form.name || !form.amount) return;
     setData(d => ({ ...d, costs: [...d.costs, { ...form, id: Date.now().toString(), amount: parseFloat(form.amount) }] }));
     setAdding(false);
     setForm({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
   }
-  const upcoming = [...data.costs].filter(c => c.nextDue).sort((a, b) => a.nextDue.localeCompare(b.nextDue)).slice(0, 5);
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <FileUploadCard defaultType="cost_list" onFileReady={onImport} readonly={readonly} learnedRules={buildLearnedRules(data.transactions||[], data.merchantRules||[])} />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-        <Card><Stat label="Total Monthly" value={fmtHUF(totalHUF)} color={C.red} /></Card>
-        <Card><Stat label="Recurring" value={data.costs.filter(c => c.type === "recurring").length} /></Card>
-        <Card><Stat label="One-time" value={data.costs.filter(c => c.type === "onetime").length} /></Card>
+      <FileUploadCard defaultType="cost_list" onFileReady={onImport} readonly={readonly} />
+
+      {/* Month picker + stats */}
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
+        <MonthPicker viewMonth={viewMonth} setViewMonth={setViewMonth} thisMonth={thisMonth} />
+        <Card><Stat label="Total" value={`−${fmtHUF(totalHUF)}`} color={C.red} /></Card>
+        <Card><Stat label="Bills" value={`−${fmtHUF(billsHUF)}`} color={C.blue} /></Card>
+        <Card><Stat label="Transactions" value={`−${fmtHUF(txnHUF)}`} color={C.purple} /></Card>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+
+      {/* Pie chart */}
+      {pieData.length > 0 && (
         <Card>
-          <div style={{ fontWeight: 600, marginBottom: 12 }}>By Category</div>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Spending by Category</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Bills + expense transactions combined</div>
           <ResponsiveContainer width="100%" height={200}>
-            <PieChart><Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}>
-              {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-            </Pie><Tooltip formatter={v => fmtHUF(v)} /></PieChart>
+            <PieChart>
+              <Pie data={pieData} dataKey="value" nameKey="name" cx="35%" cy="50%" outerRadius={80}>
+                {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+              </Pie>
+              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Legend layout="vertical" align="right" verticalAlign="middle" wrapperStyle={{ fontSize: 12, color: C.muted }} />
+            </PieChart>
           </ResponsiveContainer>
         </Card>
-        <Card>
-          <div style={{ fontWeight: 600, marginBottom: 12 }}>Upcoming Due Dates</div>
-          {upcoming.map(c => (
-            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
-              <div><div style={{ fontSize: 13 }}>{c.name}</div><div style={{ fontSize: 11, color: C.muted }}>{c.nextDue}</div></div>
-              <div style={{ fontWeight: 600, color: C.red }}>{fmtHUF(toHUF(c.amount, c.currency))}</div>
-            </div>
-          ))}
+      )}
+
+      {/* Upcoming due dates — compact, max 3 */}
+      {upcomingPreview.length > 0 && (
+        <Card style={{ padding: "14px 20px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontWeight: 600 }}>Upcoming Due Dates</div>
+            {allUpcoming.length > 3 && (
+              <button onClick={() => setShowAllUpcoming(true)}
+                style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+                View all {allUpcoming.length} →
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            {upcomingPreview.map(c => (
+              <div key={c.id} style={{ flex: 1, background: C.bg, borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{c.nextDue}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.red }}>−{fmtHUF(toHUF(c.amount, c.currency))}</div>
+              </div>
+            ))}
+          </div>
         </Card>
-      </div>
+      )}
+
+      {/* Upcoming modal */}
+      {showAllUpcoming && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => setShowAllUpcoming(false)}>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, width: 420, maxHeight: "70vh", overflowY: "auto" }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>All Upcoming Due Dates</div>
+              <button onClick={() => setShowAllUpcoming(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>×</button>
+            </div>
+            {allUpcoming.map(c => (
+              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div><div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div><div style={{ fontSize: 11, color: C.muted }}>{c.nextDue} · {c.frequency}</div></div>
+                <div style={{ fontWeight: 600, color: C.red }}>−{fmtHUF(toHUF(c.amount, c.currency))}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* All costs list — bills + month transactions */}
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontWeight: 600 }}>All Costs</div>
-          {!readonly && <Btn onClick={() => setAdding(!adding)}>{adding ? "Cancel" : "+ Add manually"}</Btn>}
+          {!readonly && <Btn onClick={() => setAdding(!adding)}>{adding ? "Cancel" : "+ Add bill"}</Btn>}
         </div>
         {adding && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 16, padding: 16, background: C.surfaceHigh, borderRadius: 10 }}>
@@ -323,20 +417,70 @@ function Costs({ data, setData, readonly, onImport }) {
             <Btn onClick={addCost} style={{ gridColumn: "span 4" }}>Save</Btn>
           </div>
         )}
-        {data.costs.map(c => (
-          <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <Tag color={C.blue}>{c.category}</Tag>
-              <Tag color={C.muted}>{c.owner}</Tag>
-              <span style={{ fontSize: 13 }}>{c.name}</span>
+
+        {/* Recurring bills section */}
+        {bills.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, padding: "8px 0 6px" }}>Recurring &amp; One-time Bills</div>
+            {bills.map(c => (
+              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <select value={c.category}
+                    onChange={e => setData(d => ({ ...d, costs: d.costs.map(x => x.id === c.id ? { ...x, category: e.target.value } : x) }))}
+                    disabled={readonly}
+                    style={{ background: C.blue + "22", color: C.blue, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none" }}>
+                    {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                  <Tag color={C.muted}>{c.type}</Tag>
+                  <span style={{ fontSize: 13 }}>{c.name}</span>
+                </div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <span style={{ color: C.red, fontWeight: 600 }}>−{fmtHUF(toHUF(c.amount, c.currency))}</span>
+                  <span style={{ fontSize: 11, color: C.muted }}>{c.frequency}</span>
+                  {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, costs: d.costs.filter(x => x.id !== c.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* Expense transactions for selected month */}
+        {monthTxns.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, padding: "14px 0 6px" }}>
+              Outflows from Cash Flow — {new Date(viewMonth + "-01").toLocaleString("en-GB", { month: "long", year: "numeric" })}
             </div>
-            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <span style={{ color: C.red, fontWeight: 600 }}>{fmtHUF(toHUF(c.amount, c.currency))}</span>
-              <span style={{ fontSize: 11, color: C.muted }}>{c.frequency}</span>
-              {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, costs: d.costs.filter(x => x.id !== c.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
-            </div>
+            {monthTxns.map(t => (
+              <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+                  <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{t.date}</span>
+                  <select value={t.category}
+                    onChange={e => {
+                      const newCat = e.target.value;
+                      const keyword = (t.desc || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4);
+                      setData(d => ({
+                        ...d,
+                        transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: newCat } : x),
+                        merchantRules: keyword ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }] : (d.merchantRules || [])
+                      }));
+                    }}
+                    disabled={readonly}
+                    style={{ background: C.red + "22", color: C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
+                    {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                  <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</span>
+                </div>
+                <span style={{ fontWeight: 600, color: C.red, flexShrink: 0 }}>−{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}</span>
+              </div>
+            ))}
+          </>
+        )}
+
+        {bills.length === 0 && monthTxns.length === 0 && (
+          <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "24px 0" }}>
+            No costs yet. Import a bank statement in Cash Flow or add a bill above.
           </div>
-        ))}
+        )}
       </Card>
 
       {/* ── Budget section ── */}
@@ -416,7 +560,7 @@ const UPLOAD_GUIDES = {
   },
 };
 
-function FileUploadCard({ defaultType, onFileReady, readonly, learnedRules = {} }) {
+function FileUploadCard({ defaultType, onFileReady, readonly }) {
   const [expanded, setExpanded] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
@@ -426,13 +570,7 @@ function FileUploadCard({ defaultType, onFileReady, readonly, learnedRules = {} 
   async function processFile(file) {
     try {
       const text = await fileToText(file);
-      // Try Revolut direct parse with learned rules
-      const revRows = tryParseRevolutCSV(text, learnedRules);
-      if (revRows && revRows.length > 0) {
-        onFileReady({ name: file.name, text, preParseResult: { type: "transactions", items: revRows } }, selectedType || defaultType);
-      } else {
-        onFileReady({ name: file.name, text }, selectedType || defaultType);
-      }
+      onFileReady({ name: file.name, text }, selectedType || defaultType);
       setExpanded(false);
     } catch (err) {
       alert(err.message);
@@ -561,39 +699,107 @@ function FileUploadCard({ defaultType, onFileReady, readonly, learnedRules = {} 
 
 // ─── Cash Flow Tab ────────────────────────────────────────────────────────────
 function CashFlow({ data, setData, readonly, onImport }) {
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [viewMonth, setViewMonth] = useState(thisMonth);
   const [form, setForm] = useState({ date: "", desc: "", amount: "", currency: "HUF", category: "Food", type: "expense", account: "OTP" });
   const [adding, setAdding] = useState(false);
-  const income = data.transactions.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
-  const expenses = data.transactions.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
-  const byCategory = CATEGORIES.map(cat => ({ name: cat, value: data.transactions.filter(t => t.category === cat && t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0) })).filter(d => d.value > 0);
+
+  // All months that have transactions, for the overview chart
+  const allMonths = [...new Set(data.transactions.map(t => t.date?.slice(0, 7)).filter(Boolean))].sort();
+
+  // Monthly overview data for bar chart
+  const monthlySummary = allMonths.map(ym => {
+    const txns = data.transactions.filter(t => t.date?.startsWith(ym));
+    const inc = txns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+    const exp = txns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+    const [y, m] = ym.split("-").map(Number);
+    return { month: new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "short", year: "2-digit" }), income: Math.round(inc), expenses: Math.round(exp) };
+  });
+
+  // Transactions for selected month only
+  const monthTxns = data.transactions.filter(t => t.date?.startsWith(viewMonth));
+  const income = monthTxns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+  const expenses = monthTxns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+  const net = income - expenses;
+
+  const byCategory = CATEGORIES.filter(c => c !== "Income").map(cat => ({
+    name: cat,
+    value: monthTxns.filter(t => t.category === cat && t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0)
+  })).filter(d => d.value > 0);
+
   function addTransaction() {
     if (!form.date || !form.desc || !form.amount) return;
     const amt = form.type === "expense" ? -Math.abs(parseFloat(form.amount)) : Math.abs(parseFloat(form.amount));
     setData(d => ({ ...d, transactions: [{ ...form, id: Date.now().toString(), amount: amt }, ...d.transactions] }));
     setAdding(false);
   }
+
+  function changeCategory(t, newCat) {
+    const keyword = (t.desc || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4);
+    setData(d => ({
+      ...d,
+      transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: newCat } : x),
+      merchantRules: keyword
+        ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }]
+        : (d.merchantRules || [])
+    }));
+  }
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <FileUploadCard defaultType="bank_statement" onFileReady={onImport} readonly={readonly} learnedRules={buildLearnedRules(data.transactions||[], data.merchantRules||[])} />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-        <Card><Stat label="Income" value={fmtHUF(income)} color={C.green} /></Card>
-        <Card><Stat label="Expenses" value={fmtHUF(expenses)} color={C.red} /></Card>
-        <Card><Stat label="Net" value={fmtHUF(income - expenses)} color={income >= expenses ? C.green : C.red} /></Card>
+      <FileUploadCard defaultType="bank_statement" onFileReady={onImport} readonly={readonly} />
+
+      {/* Monthly overview chart — all months */}
+      {monthlySummary.length > 1 && (
+        <Card>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Monthly Overview</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>Income vs expenses across all months</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={monthlySummary} barGap={2}>
+              <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
+              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12, color: C.muted }} />
+              <Bar dataKey="income" name="Income" fill={C.green} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="expenses" name="Expenses" fill={C.red} radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Month picker + stat cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
+        <MonthPicker viewMonth={viewMonth} setViewMonth={setViewMonth} thisMonth={thisMonth} />
+        <Card><Stat label="Income" value={`+${fmtHUF(income)}`} color={C.green} /></Card>
+        <Card><Stat label="Expenses" value={`−${fmtHUF(expenses)}`} color={C.red} /></Card>
+        <Card><Stat label="Net" value={`${net >= 0 ? "+" : "−"}${fmtHUF(Math.abs(net))}`} color={net >= 0 ? C.green : C.red} /></Card>
       </div>
-      <Card>
-        <div style={{ fontWeight: 600, marginBottom: 12 }}>Expense Breakdown</div>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={byCategory}>
-            <XAxis dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} />
-            <YAxis tick={{ fill: C.muted, fontSize: 11 }} />
-            <Tooltip formatter={v => fmtHUF(v)} />
-            <Bar dataKey="value" fill={C.blue} radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
+
+      {/* Category breakdown for selected month */}
+      {byCategory.length > 0 && (
+        <Card>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Expense Breakdown</div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 16 }}>
+              <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} width={90} axisLine={false} tickLine={false} />
+              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                {byCategory.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Transaction list for selected month */}
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-          <div style={{ fontWeight: 600 }}>Transactions</div>
+          <div>
+            <div style={{ fontWeight: 600 }}>Transactions</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{monthTxns.length} entries · click category to recategorize</div>
+          </div>
           {!readonly && <Btn onClick={() => setAdding(!adding)}>{adding ? "Cancel" : "+ Add manually"}</Btn>}
         </div>
         {adding && (
@@ -601,32 +807,24 @@ function CashFlow({ data, setData, readonly, onImport }) {
             <Inp value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} placeholder="Date (YYYY-MM-DD)" />
             <Inp value={form.desc} onChange={v => setForm(f => ({ ...f, desc: v }))} placeholder="Description" />
             <Inp value={form.amount} onChange={v => setForm(f => ({ ...f, amount: v }))} placeholder="Amount" type="number" />
-            <Sel value={form.currency} onChange={v => setForm(f => ({ ...f, currency: v }))} options={["HUF","EUR","USD"]} />
+            <Sel value={form.currency} onChange={v => setForm(f => ({ ...f, currency: v }))} options={["HUF", "EUR", "USD"]} />
             <Sel value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={CATEGORIES} />
-            <Sel value={form.type} onChange={v => setForm(f => ({ ...f, type: v }))} options={["expense","income"]} />
+            <Sel value={form.type} onChange={v => setForm(f => ({ ...f, type: v }))} options={["expense", "income"]} />
             <Inp value={form.account} onChange={v => setForm(f => ({ ...f, account: v }))} placeholder="Account" />
             <Btn onClick={addTransaction} style={{ gridColumn: "span 4" }}>Save</Btn>
           </div>
         )}
-        {data.transactions.map(t => (
+        {monthTxns.length === 0 && (
+          <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "24px 0" }}>
+            No transactions for this month.<br />
+            <span style={{ fontSize: 12 }}>Upload a bank statement or add manually.</span>
+          </div>
+        )}
+        {monthTxns.map(t => (
           <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
               <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{t.date}</span>
-              <select
-                value={t.category}
-                onChange={e => {
-                  const newCat = e.target.value;
-                  // Save merchant rule for adaptive categorization
-                  const keyword = (t.desc || "").toLowerCase().split(/\s+/).find(w => w.length >= 4);
-                  setData(d => ({
-                    ...d,
-                    transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: newCat } : x),
-                    merchantRules: keyword
-                      ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }]
-                      : (d.merchantRules || [])
-                  }));
-                }}
-                disabled={readonly}
+              <select value={t.category} onChange={e => changeCategory(t, e.target.value)} disabled={readonly}
                 style={{ background: (t.type === "income" ? C.green : C.red) + "22", color: t.type === "income" ? C.green : C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
                 {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
               </select>
@@ -1215,7 +1413,7 @@ function Wealth({ data, setData, readonly, onImport }) {
   return (
     <div style={{ display: "grid", gap: 16 }}>
 
-      <FileUploadCard defaultType="investment_export" onFileReady={onImport} readonly={readonly} learnedRules={buildLearnedRules(data.transactions||[], data.merchantRules||[])} />
+      <FileUploadCard defaultType="investment_export" onFileReady={onImport} readonly={readonly} />
 
       {/* ── Stats row ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16 }}>
@@ -1758,17 +1956,17 @@ IMPORT_BATCH:
 {"type":"savings_goals","summary":"New savings goal","items":[{"name":"string","targetAmount":number,"currentAmount":number,"monthlyContribution":number,"currency":"HUF"|"EUR"|"USD","targetDate":"YYYY-MM-DD"|"","notes":"string"}]}
 
 ━━ CATEGORY INFERENCE ━━
-Lidl/Aldi/Spar/Tesco/Penny/market/zöldséges/food/étterem/bisztro/pizza/kebab → Food
+Lidl/Aldi/Spar/Tesco/Penny/market/zöldséges/étterem/pizza/kebab/food → Food
 BKK/Volán/MÁV/Uber/Bolt/taxi/fuel/MOL/Shell/OMV/parking → Transport
 Netflix/Spotify/Steam/HBO/cinema/mozi/TV2/arena → Entertainment
 Doctor/orvos/pharmacy/patika/gyógyszer/gyógyszertár → Health
 Electricity/áram/MVM/gas/gáz/Díjnet/internet/water/víz → Utilities
 Rent/lakbér/albérlet/mortgage/jelzálog → Housing
-Zara/H&M/Sinsay/Pepco/Reserved/Vinted/Deichmann/ruha/clothing → Clothing
+Zara/H&M/Sinsay/Pepco/Reserved/Vinted/Deichmann/ruha → Clothing
 Hornbach/OBI/Bauhaus/Leroy/kertészet/garden/növény → Garden
 Salary/fizetés/bér/dividend → Income (type=income, amount positive)
 Átutalás/transfer/utalás between accounts → Transfer
-Feltöltés/top-up → Income
+Feltöltés/top-up/refill → Income
 Default → Other
 `}`;
 }
@@ -1817,15 +2015,6 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   // When a file arrives from a tab upload card, pre-load it
   useEffect(() => {
     if (!pendingImport) return;
-    // If the upload card pre-parsed the file (Revolut), show batch directly
-    if (pendingImport.preParseResult) {
-      const { type, items } = pendingImport.preParseResult;
-      setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${items.length} transactions using your learned rules. Review and confirm below.` }]);
-      setPendingBatch({ type, summary: `${items.length} transactions from ${pendingImport.name}`, items, checked: items.map(() => true) });
-      setMinimized(false);
-      clearPendingImport?.();
-      return;
-    }
     setAttachedFile({ name: pendingImport.name, text: pendingImport.text });
     setFileType(pendingImport.fileType);
     setMinimized(false);
@@ -1858,9 +2047,8 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
     if (!file) return;
     try {
       const text = await fileToText(file);
-      // Build learned rules from existing transactions + saved merchant rules
+      // Try Revolut direct parse — bypasses Claude token limits entirely
       const learnedRules = buildLearnedRules(data.transactions || [], data.merchantRules || []);
-      // Try Revolut direct parse (bypasses Claude token limits, uses learned rules)
       const revRows = tryParseRevolutCSV(text, learnedRules);
       if (revRows && revRows.length > 0) {
         setMessages(m => [...m, { role: "user", content: `📎 ${file.name} [Bank statement]` }]);
