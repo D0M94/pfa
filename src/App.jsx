@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Component } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   BarChart, Bar, PieChart, Pie, Cell,
@@ -1885,6 +1885,24 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
 }
 
 
+// ─── Data normalizer — ensures all expected arrays exist after Supabase load ───
+function normalizeData(raw) {
+  if (!raw || typeof raw !== "object") return EMPTY_DATA;
+  return {
+    ...EMPTY_DATA,
+    ...raw,
+    costs: raw.costs || [],
+    transactions: raw.transactions || [],
+    portfolios: (raw.portfolios || []).map(p => ({ ...p, positions: p.positions || [] })),
+    realEstate: raw.realEstate || [],
+    cashAccounts: raw.cashAccounts || [],
+    budgetTargets: raw.budgetTargets || [],
+    savingsGoals: raw.savingsGoals || [],
+    netWorthHistory: raw.netWorthHistory || [],
+    merchantRules: raw.merchantRules || [],
+  };
+}
+
 // ─── Wealth Tab ───────────────────────────────────────────────────────────────
 // NW snapshot: call once on app load if current month not yet recorded
 function maybeSnapshotNW(data, setData) {
@@ -1892,11 +1910,11 @@ function maybeSnapshotNW(data, setData) {
   const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const history = data.netWorthHistory || [];
   if (history.some(h => h.date === ym)) return; // already have this month
-  const investments = data.portfolios.flatMap(p => p.positions)
-    .reduce((s, pos) => s + toHUF(pos.qty * pos.currentPrice, pos.currency), 0);
-  const realEstate = data.realEstate
-    .reduce((s, r) => s + toHUF(r.currentValue - r.mortgage, r.currency), 0);
-  const cash = data.cashAccounts
+  const investments = (data.portfolios || []).flatMap(p => p.positions || [])
+    .reduce((s, pos) => s + toHUF((pos.qty || 0) * (pos.currentPrice || 0), pos.currency), 0);
+  const realEstate = (data.realEstate || [])
+    .reduce((s, r) => s + toHUF((r.currentValue || 0) - (r.mortgage || 0), r.currency), 0);
+  const cash = (data.cashAccounts || [])
     .reduce((s, a) => s + toHUF(a.balance, a.currency), 0);
   const totalNW = investments + realEstate + cash;
   setData(d => ({
@@ -3065,8 +3083,35 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   );
 }
 
+// ─── Error Boundary ───────────────────────────────────────────────────────────
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ minHeight: "100vh", background: "#0f0f11", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 40, fontFamily: "'DM Sans', sans-serif", color: "#e8e8f0" }}>
+          <div style={{ fontSize: 40, marginBottom: 20 }}>⚠</div>
+          <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 8, color: "#f05a5a" }}>Something went wrong</div>
+          <div style={{ fontSize: 13, color: "#a0a0b8", marginBottom: 24, maxWidth: 480, textAlign: "center", lineHeight: 1.6 }}>
+            {this.state.error?.message || "An unexpected error occurred."}
+          </div>
+          <button onClick={() => window.location.reload()} style={{ background: "#e8c547", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 14, fontWeight: 700, color: "#000", cursor: "pointer" }}>
+            Reload
+          </button>
+          <details style={{ marginTop: 20, fontSize: 11, color: "#6b6b7e", maxWidth: 600 }}>
+            <summary style={{ cursor: "pointer" }}>Technical details</summary>
+            <pre style={{ marginTop: 8, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{this.state.error?.stack}</pre>
+          </details>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ─── App Shell ────────────────────────────────────────────────────────────────
-export default function App() {
+function AppInner() {
   const [session, setSession] = useState(null);
   const [isDemo, setIsDemo] = useState(false);
   const [authReady, setAuthReady] = useState(false);
@@ -3083,6 +3128,8 @@ export default function App() {
   const [data, setDataRaw] = useState(EMPTY_DATA);
   const [householdId, setHouseholdId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); setAuthReady(true); });
@@ -3092,17 +3139,15 @@ export default function App() {
 
   useEffect(() => {
     if (!authReady) return;
-    if (isDemo) loadHousehold(DEMO_ID);
-    else if (session?.user) loadOrCreateHousehold(session.user.id);
+    if (isDemo) {
+      // Use hardcoded demo data — no Supabase dependency, always fresh
+      setHouseholdId(DEMO_ID);
+      setDataRaw(normalizeData(DEMO_DATA));
+    } else if (session?.user) {
+      loadOrCreateHousehold(session.user.id);
+    }
   }, [session, isDemo, authReady]);
 
-  const [loadError, setLoadError] = useState(null);
-
-  async function loadHousehold(id) {
-    const { data: row, error } = await supabase.from("households").select("id, data").eq("id", id).single();
-    if (error && !row) { setLoadError("Could not load demo data — check your connection."); return; }
-    if (row) { setHouseholdId(row.id); setDataRaw(row.data); }
-  }
   async function loadOrCreateHousehold(userId) {
     let { data: row, error } = await supabase.from("households").select("id, data").eq("user_id", userId).single();
     if (error && error.code !== "PGRST116") { setLoadError("Could not load your data — check your connection and try refreshing."); return; }
@@ -3111,9 +3156,8 @@ export default function App() {
       if (insertErr) { setLoadError("Could not create your account — please try again."); return; }
       row = newRow;
     }
-    if (row) { setHouseholdId(row.id); setDataRaw(row.data); }
+    if (row) { setHouseholdId(row.id); setDataRaw(normalizeData(row.data)); }
   }
-  const [saveError, setSaveError] = useState(false);
 
   useEffect(() => {
     if (!householdId || isDemo) return;
@@ -3217,4 +3261,8 @@ export default function App() {
       <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} />
     </div>
   );
+}
+
+export default function App() {
+  return <ErrorBoundary><AppInner /></ErrorBoundary>;
 }
