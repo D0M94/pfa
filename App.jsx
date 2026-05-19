@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   AreaChart, Area,
+  ComposedChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, ReferenceLine
 } from "recharts";
 
@@ -17,11 +18,27 @@ const DEMO_ID = import.meta.env.VITE_DEMO_HOUSEHOLD_ID;
 const EUR_HUF = 395;
 const USD_HUF = 360;
 
-const C = {
+const DARK_C = {
   bg: "#0f0f11", surface: "#18181c", surfaceHigh: "#222228", border: "#2a2a32",
   accent: "#e8c547", red: "#f05a5a", green: "#4fc98a", blue: "#5a9cf0",
   purple: "#a07cf0", orange: "#f09a5a", muted: "#6b6b7e", text: "#e8e8f0", textSoft: "#a0a0b8",
 };
+const LIGHT_C = {
+  bg: "#f2f3f7", surface: "#ffffff", surfaceHigh: "#e8eaf2", border: "#d0d4e8",
+  accent: "#b8950a", red: "#c93030", green: "#2a8a55", blue: "#2a5cb5",
+  purple: "#6030b0", orange: "#c06010", muted: "#7878a0", text: "#13131e", textSoft: "#44446a",
+};
+let C = { ...DARK_C };
+
+function useIsMobile() {
+  const [m, setM] = useState(() => typeof window !== "undefined" && window.innerWidth <= 680);
+  useEffect(() => {
+    const h = () => setM(window.innerWidth <= 680);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return m;
+}
 
 const CATEGORIES = ["Housing","Food","Transport","Utilities","Health","Education","Entertainment","Clothing","Garden","Savings","Income","Transfer","Other"];
 const PIE_COLORS = [C.blue, C.green, C.accent, C.purple, C.orange, C.red, C.muted, C.textSoft, "#e87ca0", "#7acc7a", C.blue, C.orange, C.muted];
@@ -233,31 +250,121 @@ function Auth({ onLogin }) {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const isMobile = useIsMobile();
+
   async function sendLink() {
-    if (!email) return;
-    setLoading(true);
+    if (!email || !email.includes("@")) { setAuthError("Please enter a valid email address."); return; }
+    setLoading(true); setAuthError(null);
     const { error } = await supabase.auth.signInWithOtp({ email });
-    if (!error) setSent(true);
+    if (error) { setAuthError("Couldn't send the link — you may not be on the access list yet."); }
+    else { setSent(true); }
     setLoading(false);
   }
+
+  const features = [
+    { icon: "📊", label: "Spending by category", desc: "See exactly where your money goes each month" },
+    { icon: "🏦", label: "Bank import", desc: "Upload Revolut, OTP, Erste CSV — auto-categorized" },
+    { icon: "📈", label: "Investment tracker", desc: "Portfolio positions, P&L, asset class breakdown" },
+    { icon: "🎯", label: "Budget targets", desc: "Set limits, auto-detect recurring bills, get alerts" },
+    { icon: "💬", label: "AI assistant", desc: "Ask questions, log transactions by typing naturally" },
+    { icon: "🔒", label: "Private & secure", desc: "Your data is yours — no ads, no sharing" },
+  ];
+
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <Card style={{ width: 360, textAlign: "center" }}>
-        <div style={{ fontSize: 32, marginBottom: 8 }}>✦</div>
-        <div style={{ fontSize: 22, fontWeight: 700, color: C.accent, marginBottom: 4 }}>PFA</div>
-        <div style={{ fontSize: 13, color: C.muted, marginBottom: 24 }}>Personal Finance Assistant</div>
-        {sent ? (
-          <div style={{ color: C.green, fontSize: 14 }}>✓ Check your email for the login link.</div>
-        ) : (
-          <>
-            <Inp value={email} onChange={setEmail} placeholder="your@email.com" type="email" style={{ marginBottom: 10 }} />
-            <Btn onClick={sendLink} disabled={loading} style={{ width: "100%" }}>{loading ? "Sending..." : "Send Magic Link"}</Btn>
-          </>
-        )}
-        <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-          <Btn variant="ghost" onClick={onLogin} style={{ width: "100%", fontSize: 12 }}>👀 View Demo (no login)</Btn>
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif", display: "flex", flexDirection: "column" }}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono&display=swap" rel="stylesheet" />
+
+      {/* Hero */}
+      <div style={{ flex: 1, display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: "center", justifyContent: "center", padding: isMobile ? "40px 20px" : "60px 48px", gap: isMobile ? 40 : 80, maxWidth: 1100, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
+
+        {/* Left — pitch */}
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.accent + "18", border: `1px solid ${C.accent}44`, borderRadius: 20, padding: "4px 12px", marginBottom: 24 }}>
+            <span style={{ color: C.accent, fontSize: 12, fontWeight: 600 }}>✦ Early Access · Invite Only</span>
+          </div>
+          <h1 style={{ fontSize: isMobile ? 32 : 44, fontWeight: 700, lineHeight: 1.15, margin: "0 0 16px", color: C.text }}>
+            Your household finances,<br />
+            <span style={{ color: C.accent }}>finally under control.</span>
+          </h1>
+          <p style={{ fontSize: 16, color: C.textSoft, lineHeight: 1.6, margin: "0 0 36px", maxWidth: 440 }}>
+            PFA is a private finance assistant for families. Import bank statements, track investments, set budgets — and talk to an AI that knows your numbers.
+          </p>
+
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
+            {features.map(f => (
+              <div key={f.icon} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "12px 14px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                <span style={{ fontSize: 20, flexShrink: 0 }}>{f.icon}</span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{f.label}</div>
+                  <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.4 }}>{f.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-      </Card>
+
+        {/* Right — login card */}
+        <div style={{ width: isMobile ? "100%" : 360, flexShrink: 0 }}>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 32 }}>
+            {sent ? (
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 40, marginBottom: 16 }}>📬</div>
+                <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 8 }}>Check your inbox</div>
+                <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, marginBottom: 20 }}>
+                  We sent a login link to <strong style={{ color: C.text }}>{email}</strong>.<br />
+                  Click it to sign in — no password needed.
+                </div>
+                <div style={{ background: C.surfaceHigh, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.muted, textAlign: "left" }}>
+                  💡 Didn't get it? Check your spam folder or wait 30 seconds and try again.
+                </div>
+                <button onClick={() => { setSent(false); setEmail(""); }} style={{ marginTop: 20, background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>
+                  Use a different email
+                </button>
+              </div>
+            ) : (
+              <>
+                <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 4 }}>Sign in to PFA</div>
+                <div style={{ fontSize: 13, color: C.muted, marginBottom: 24, lineHeight: 1.5 }}>
+                  Enter your email and we'll send you a secure login link. No password required.
+                </div>
+
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Email address</div>
+                  <Inp value={email} onChange={v => { setEmail(v); setAuthError(null); }}
+                    placeholder="you@example.com" type="email"
+                    onKeyDown={e => e.key === "Enter" && sendLink()} />
+                </div>
+
+                {authError && (
+                  <div style={{ background: C.red + "18", border: `1px solid ${C.red}44`, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: C.red, marginBottom: 12, lineHeight: 1.5 }}>
+                    ⚠ {authError}
+                  </div>
+                )}
+
+                <Btn onClick={sendLink} disabled={loading || !email} style={{ width: "100%", marginBottom: 16, padding: "11px 0", fontSize: 14 }}>
+                  {loading ? "Sending…" : "Send login link →"}
+                </Btn>
+
+                <div style={{ background: C.surfaceHigh, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+                  🔒 <strong style={{ color: C.textSoft }}>Invite only.</strong> Access is currently limited. If you don't receive a link, reach out to get added to the list.
+                </div>
+              </>
+            )}
+
+            <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.border}`, textAlign: "center" }}>
+              <button onClick={onLogin} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>
+                Explore the demo without signing in →
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div style={{ borderTop: `1px solid ${C.border}`, padding: "16px 24px", textAlign: "center", fontSize: 11, color: C.muted }}>
+        PFA · Personal Finance Assistant · Built for families · Data stored securely
+      </div>
     </div>
   );
 }
@@ -285,8 +392,152 @@ function MonthPicker({ viewMonth, setViewMonth, thisMonth }) {
   );
 }
 
+// ─── Editable Transaction Row (used in cost modal + all-txn modal) ────────────
+function EditableTxnRow({ t, readonly, setData }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({ date: t.date, desc: t.desc, amount: String(Math.abs(t.amount)), currency: t.currency, category: t.category, type: t.type });
+
+  function save() {
+    const amt = parseFloat(draft.amount);
+    if (!amt) return;
+    const keyword = (draft.desc || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4);
+    setData(d => ({
+      ...d,
+      transactions: d.transactions.map(x => x.id === t.id ? {
+        ...x, date: draft.date, desc: draft.desc, category: draft.category, type: draft.type, currency: draft.currency,
+        amount: draft.type === "expense" ? -Math.abs(amt) : Math.abs(amt)
+      } : x),
+      merchantRules: keyword && draft.category !== t.category
+        ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: draft.category }]
+        : (d.merchantRules || [])
+    }));
+    setEditing(false);
+  }
+
+  if (editing && !readonly) {
+    return (
+      <div style={{ padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr 1fr", gap: 6, marginBottom: 6 }}>
+          <Inp value={draft.date} onChange={v => setDraft(d => ({ ...d, date: v }))} type="date" />
+          <Inp value={draft.desc} onChange={v => setDraft(d => ({ ...d, desc: v }))} placeholder="Description" />
+          <Inp value={draft.amount} onChange={v => setDraft(d => ({ ...d, amount: v }))} placeholder="Amount" type="number" />
+          <Sel value={draft.currency} onChange={v => setDraft(d => ({ ...d, currency: v }))} options={["HUF","EUR","USD"]} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 6 }}>
+          <Sel value={draft.category} onChange={v => setDraft(d => ({ ...d, category: v }))} options={CATEGORIES} />
+          <Sel value={draft.type} onChange={v => setDraft(d => ({ ...d, type: v }))} options={["expense","income"]} />
+          <Btn onClick={save} style={{ fontSize: 12 }}>Save</Btn>
+          <Btn variant="ghost" onClick={() => setEditing(false)} style={{ fontSize: 12 }}>Cancel</Btn>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+        <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{t.date}</span>
+        <select value={t.category}
+          onChange={e => {
+            const newCat = e.target.value;
+            const keyword = (t.desc || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4);
+            setData(d => ({
+              ...d,
+              transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: newCat } : x),
+              merchantRules: keyword ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }] : (d.merchantRules || [])
+            }));
+          }}
+          disabled={readonly}
+          style={{ background: (t.type === "income" ? C.green : C.red) + "22", color: t.type === "income" ? C.green : C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
+          {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+        </select>
+        <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+        <span style={{ fontWeight: 600, color: t.type === "income" ? C.green : C.red }}>
+          {t.type === "expense" ? "−" : "+"}{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}
+        </span>
+        {!readonly && (
+          <button onClick={() => { setDraft({ date: t.date, desc: t.desc, amount: String(Math.abs(t.amount)), currency: t.currency, category: t.category, type: t.type }); setEditing(true); }}
+            style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: "0 2px" }}>✎</button>
+        )}
+        {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, transactions: d.transactions.filter(x => x.id !== t.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Getting Started Empty State ──────────────────────────────────────────────
+function GettingStarted({ tab, readonly, onOpenChat }) {
+  const configs = {
+    costs: {
+      icon: "📋",
+      title: "Track your recurring costs",
+      subtitle: "Add your bills, subscriptions, and fixed expenses to see where your money goes each month.",
+      steps: [
+        { icon: "➕", text: "Add a recurring bill (rent, subscriptions, utilities)" },
+        { icon: "💬", text: "Or tell the AI: \"Add 120k HUF monthly rent\"" },
+        { icon: "📂", text: "Import a cost list from Excel or CSV" },
+      ],
+    },
+    cashflow: {
+      icon: "💸",
+      title: "See your monthly cash flow",
+      subtitle: "Import your bank statement to automatically track income and expenses.",
+      steps: [
+        { icon: "🏦", text: "Upload your bank CSV (Revolut, OTP, Erste supported)" },
+        { icon: "💬", text: "Or type: \"I spent 8500 HUF on lunch today\"" },
+        { icon: "📊", text: "Get monthly income/expense charts automatically" },
+      ],
+    },
+    wealth: {
+      icon: "📈",
+      title: "Track your net worth",
+      subtitle: "Add your investments, real estate, and cash accounts for a complete wealth picture.",
+      steps: [
+        { icon: "📦", text: "Create a portfolio and add your positions (IBKR, Erste…)" },
+        { icon: "🏠", text: "Add real estate with current value and mortgage" },
+        { icon: "💰", text: "Add cash accounts and savings" },
+      ],
+    },
+  };
+
+  const cfg = configs[tab];
+  if (!cfg) return null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 24px", textAlign: "center", maxWidth: 520, margin: "0 auto" }}>
+      <div style={{ fontSize: 48, marginBottom: 20, lineHeight: 1 }}>{cfg.icon}</div>
+      <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 8, color: C.text }}>{cfg.title}</div>
+      <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, marginBottom: 32 }}>{cfg.subtitle}</div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", marginBottom: 32 }}>
+        {cfg.steps.map((s, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", textAlign: "left" }}>
+            <span style={{ fontSize: 18, flexShrink: 0 }}>{s.icon}</span>
+            <span style={{ fontSize: 13, color: C.textSoft }}>{s.text}</span>
+          </div>
+        ))}
+      </div>
+
+      {!readonly && (
+        <button onClick={onOpenChat}
+          style={{ background: C.accent, border: "none", borderRadius: 10, padding: "12px 28px", fontSize: 14, fontWeight: 700, color: "#000", cursor: "pointer" }}>
+          ✦ Ask the AI to get started
+        </button>
+      )}
+      {readonly && (
+        <div style={{ fontSize: 12, color: C.muted, background: C.surfaceHigh, borderRadius: 8, padding: "10px 16px" }}>
+          📖 Demo mode — sign in to add your own data
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Costs Tab ────────────────────────────────────────────────────────────────
-function Costs({ data, setData, readonly, onImport }) {
+function Costs({ data, setData, readonly, onImport, onOpenChat }) {
+  const isMobile = useIsMobile();
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const [viewMonth, setViewMonth] = useState(thisMonth);
@@ -332,17 +583,34 @@ function Costs({ data, setData, readonly, onImport }) {
     return { name: cat, value: Math.round(fromBills + fromTxns) };
   }).filter(d => d.value > 0);
 
-  // Stacked bar chart: per month — recurring bills vs variable (onetime bills + txn expenses)
+  // Stacked bar chart: per month — % recurring vs % variable
   const stackedBarData = allMonths.map(ym => {
     const mTxnHUF = data.transactions.filter(t => t.type === "expense" && t.date?.startsWith(ym))
       .reduce((s, t) => s + toHUF(Math.abs(t.amount), t.currency), 0);
     const [y, m] = ym.split("-").map(Number);
+    const rec = recurringBillsHUF;
+    const vari = onetimeBillsHUF + mTxnHUF;
+    const total = rec + vari;
     return {
       month: new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "short", year: "2-digit" }),
-      recurring: Math.round(recurringBillsHUF),
-      variable: Math.round(onetimeBillsHUF + mTxnHUF),
+      recurring: total > 0 ? Math.round((rec / total) * 100) : 0,
+      variable: total > 0 ? Math.round((vari / total) * 100) : 0,
+      recHUF: Math.round(rec), variHUF: Math.round(vari),
     };
   });
+  // Average bar (single entry for avg mode)
+  const avgBarData = (() => {
+    if (allMonths.length === 0) return [];
+    const rec = recurringBillsHUF;
+    const variArr = allMonths.map(ym =>
+      data.transactions.filter(t => t.type === "expense" && t.date?.startsWith(ym))
+        .reduce((s, t) => s + toHUF(Math.abs(t.amount), t.currency), 0)
+    );
+    const vari = onetimeBillsHUF + variArr.reduce((a, b) => a + b, 0) / allMonths.length;
+    const total = rec + vari;
+    return [{ month: `Avg (${allMonths.length}mo)`, recurring: total > 0 ? Math.round((rec / total) * 100) : 0, variable: total > 0 ? Math.round((vari / total) * 100) : 0, recHUF: Math.round(rec), variHUF: Math.round(vari) }];
+  })();
+  const activeBarData = isAvg ? avgBarData : stackedBarData;
 
   // Upcoming due dates
   const allUpcoming = [...bills].filter(c => c.nextDue).sort((a, b) => a.nextDue.localeCompare(b.nextDue));
@@ -355,12 +623,15 @@ function Costs({ data, setData, readonly, onImport }) {
     setForm({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
   }
 
+  const isEmpty = data.costs.length === 0 && data.transactions.length === 0;
+  if (isEmpty) return <GettingStarted tab="costs" readonly={readonly} onOpenChat={onOpenChat} />;
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <FileUploadCard defaultType="cost_list" onFileReady={onImport} readonly={readonly} />
 
       {/* Month picker + view mode toggle + stats */}
-      <div style={{ display: "grid", gridTemplateColumns: "auto auto 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "auto auto 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
         <MonthPicker viewMonth={viewMonth} setViewMonth={setViewMonth} thisMonth={thisMonth} />
         <Card style={{ padding: "12px 14px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 120 }}>
           <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>View</div>
@@ -376,7 +647,7 @@ function Costs({ data, setData, readonly, onImport }) {
       </div>
 
       {/* Pie + stacked bar side by side */}
-      <div style={{ display: "grid", gridTemplateColumns: stackedBarData.length > 1 ? "1fr 1fr" : "1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: (!isMobile && stackedBarData.length > 1) ? "1fr 1fr" : "1fr", gap: 16 }}>
         {pieData.length > 0 && (
           <Card>
             <div style={{ fontWeight: 600, marginBottom: 2 }}>Spending by Category</div>
@@ -394,15 +665,16 @@ function Costs({ data, setData, readonly, onImport }) {
             </ResponsiveContainer>
           </Card>
         )}
-        {stackedBarData.length > 1 && (
+        {activeBarData.length > 0 && (
           <Card>
-            <div style={{ fontWeight: 600, marginBottom: 2 }}>Monthly Cost Breakdown</div>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Recurring bills vs variable costs per month</div>
+            <div style={{ fontWeight: 600, marginBottom: 2 }}>Cost Split</div>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{isAvg ? "Average recurring vs variable split" : "Recurring vs variable % per month"}</div>
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={stackedBarData} barGap={2}>
+              <BarChart data={activeBarData} barGap={2}>
                 <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
-                <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+                <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} domain={[0, 100]} width={36} />
+                <Tooltip formatter={(v, name, props) => [`${v}% · ${name === "Recurring" ? fmtHUF(props.payload.recHUF) : fmtHUF(props.payload.variHUF)}`, name]}
+                  contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
                 <Legend wrapperStyle={{ fontSize: 12, color: C.muted }} />
                 <Bar dataKey="recurring" name="Recurring" stackId="a" fill={C.blue} />
                 <Bar dataKey="variable" name="Variable" stackId="a" fill={C.purple} radius={[3, 3, 0, 0]} />
@@ -510,29 +782,7 @@ function Costs({ data, setData, readonly, onImport }) {
                 <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, padding: "14px 0 6px" }}>
                   Outflows — {new Date(viewMonth + "-01").toLocaleString("en-GB", { month: "long", year: "numeric" })}
                 </div>
-                {monthTxns.map(t => (
-                  <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
-                      <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{t.date}</span>
-                      <select value={t.category}
-                        onChange={e => {
-                          const newCat = e.target.value;
-                          const keyword = (t.desc || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4);
-                          setData(d => ({
-                            ...d,
-                            transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: newCat } : x),
-                            merchantRules: keyword ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }] : (d.merchantRules || [])
-                          }));
-                        }}
-                        disabled={readonly}
-                        style={{ background: C.red + "22", color: C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
-                        {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                      </select>
-                      <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</span>
-                    </div>
-                    <span style={{ fontWeight: 600, color: C.red, flexShrink: 0 }}>−{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}</span>
-                  </div>
-                ))}
+                {monthTxns.map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} />)}
               </>
             )}
 
@@ -567,11 +817,13 @@ function Costs({ data, setData, readonly, onImport }) {
 
       {/* ── Budget section ── */}
       <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 2 }}>Monthly Budget</div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
-          Actual spend from transactions · fixed recurring auto-detected · Utilities estimated from history
+        <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 2 }}>
+          {isAvg ? "Average Monthly Budget" : "Monthly Budget"}
         </div>
-        <BudgetSection data={data} setData={setData} readonly={readonly} />
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
+          {isAvg ? `Average spend across ${allMonths.length} months · fixed recurring auto-detected` : "Actual spend from transactions · fixed recurring auto-detected · Utilities estimated from history"}
+        </div>
+        <BudgetSection data={data} setData={setData} readonly={readonly} viewMonth={viewMonth} isAvg={isAvg} allMonths={allMonths} />
       </div>
     </div>
   );
@@ -647,15 +899,17 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
   const [dragging, setDragging] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [selectedType, setSelectedType] = useState(defaultType || null);
+  const [uploadError, setUploadError] = useState(null);
   const fileInputRef = useRef(null);
 
   async function processFile(file) {
+    setUploadError(null);
     try {
       const text = await fileToText(file);
       onFileReady({ name: file.name, text }, selectedType || defaultType);
       setExpanded(false);
     } catch (err) {
-      alert(err.message);
+      setUploadError(err.message || "Could not read file. Try saving as .csv and uploading again.");
     }
   }
 
@@ -774,13 +1028,25 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
           </div>
         </div>
         <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={onPick} style={{ display: "none" }} />
+
+        {uploadError && (
+          <div style={{ marginTop: 10, background: C.red + "18", border: `1px solid ${C.red}44`, borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <span style={{ color: C.red, fontSize: 16, flexShrink: 0 }}>⚠</span>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.red, marginBottom: 2 }}>File could not be read</div>
+              <div style={{ fontSize: 11, color: C.textSoft, lineHeight: 1.5 }}>{uploadError}</div>
+              <button onClick={() => setUploadError(null)} style={{ marginTop: 6, background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 11, textDecoration: "underline", padding: 0 }}>Dismiss</button>
+            </div>
+          </div>
+        )}
       </div>
     </Card>
   );
 }
 
 // ─── Cash Flow Tab ────────────────────────────────────────────────────────────
-function CashFlow({ data, setData, readonly, onImport }) {
+function CashFlow({ data, setData, readonly, onImport, onOpenChat }) {
+  const isMobile = useIsMobile();
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const [viewMonth, setViewMonth] = useState(thisMonth);
@@ -841,7 +1107,8 @@ function CashFlow({ data, setData, readonly, onImport }) {
     let cum = 0;
     return Object.keys(dayTotals).sort().map(day => {
       cum += dayTotals[day];
-      return { day: `${parseInt(day)}`, cumNet: Math.round(cum) };
+      const cn = Math.round(cum);
+      return { day: `${parseInt(day)}`, cumNet: cn, cumPos: cn >= 0 ? cn : 0, cumNeg: cn < 0 ? cn : 0 };
     });
   })();
 
@@ -852,37 +1119,7 @@ function CashFlow({ data, setData, readonly, onImport }) {
     setAdding(false);
   }
 
-  function changeCategory(t, newCat) {
-    const keyword = (t.desc || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4);
-    setData(d => ({
-      ...d,
-      transactions: d.transactions.map(x => x.id === t.id ? { ...x, category: newCat } : x),
-      merchantRules: keyword
-        ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }]
-        : (d.merchantRules || [])
-    }));
-  }
-
-  function TxnRow({ t }) {
-    return (
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
-          <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{t.date}</span>
-          <select value={t.category} onChange={e => changeCategory(t, e.target.value)} disabled={readonly}
-            style={{ background: (t.type === "income" ? C.green : C.red) + "22", color: t.type === "income" ? C.green : C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
-            {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-          </select>
-          <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</span>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-          <span style={{ fontWeight: 600, color: t.type === "income" ? C.green : C.red }}>
-            {t.type === "expense" ? "−" : "+"}{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}
-          </span>
-          {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, transactions: d.transactions.filter(x => x.id !== t.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
-        </div>
-      </div>
-    );
-  }
+  if (data.transactions.length === 0) return <GettingStarted tab="cashflow" readonly={readonly} onOpenChat={onOpenChat} />;
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -906,8 +1143,8 @@ function CashFlow({ data, setData, readonly, onImport }) {
         </Card>
       )}
 
-      {/* Month picker + stat cards (now 5: income, expenses, net, savings rate) */}
-      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
+      {/* Month picker + stat cards */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "auto 1fr 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
         <MonthPicker viewMonth={viewMonth} setViewMonth={setViewMonth} thisMonth={thisMonth} />
         <Card><Stat label="Income" value={`+${fmtHUF(income)}`} color={C.green} /></Card>
         <Card><Stat label="Expenses" value={`−${fmtHUF(expenses)}`} color={C.red} /></Card>
@@ -924,10 +1161,10 @@ function CashFlow({ data, setData, readonly, onImport }) {
       {byCategory.length > 0 && (
         <Card>
           <div style={{ fontWeight: 600, marginBottom: 2 }}>Expense Breakdown</div>
-          <ResponsiveContainer width="100%" height={180}>
+          <ResponsiveContainer width="100%" height={Math.max(160, byCategory.length * 36)}>
             <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 16 }}>
-              <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
-              <YAxis type="category" dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} width={90} axisLine={false} tickLine={false} />
+              <XAxis type="number" tick={{ fill: C.text, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" tick={{ fill: C.text, fontSize: 11 }} width={96} axisLine={false} tickLine={false} interval={0} />
               <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
               <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                 {byCategory.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
@@ -968,20 +1205,25 @@ function CashFlow({ data, setData, readonly, onImport }) {
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
             Running net through the month — {cumulativeData[cumulativeData.length - 1].cumNet >= 0 ? "ended positive" : "ended negative"}
           </div>
-          <ResponsiveContainer width="100%" height={150}>
-            <AreaChart data={cumulativeData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+          <ResponsiveContainer width="100%" height={160}>
+            <ComposedChart data={cumulativeData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
               <defs>
-                <linearGradient id="gradCum" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={cumulativeData[cumulativeData.length - 1].cumNet >= 0 ? C.green : C.red} stopOpacity={0.4} />
-                  <stop offset="95%" stopColor={cumulativeData[cumulativeData.length - 1].cumNet >= 0 ? C.green : C.red} stopOpacity={0.03} />
+                <linearGradient id="gradPos" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.green} stopOpacity={0.5} /><stop offset="95%" stopColor={C.green} stopOpacity={0.05} />
+                </linearGradient>
+                <linearGradient id="gradNeg" x1="0" y1="1" x2="0" y2="0">
+                  <stop offset="5%" stopColor={C.red} stopOpacity={0.5} /><stop offset="95%" stopColor={C.red} stopOpacity={0.05} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} label={{ value: "day of month", position: "insideBottomRight", offset: -4, style: { fontSize: 10, fill: C.muted } }} />
+              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
-              <Tooltip formatter={v => [fmtHUF(v), "Cumulative net"]} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Tooltip formatter={(v, name) => name === "Net" ? [fmtHUF(v), "Cumulative net"] : null}
+                contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
               <ReferenceLine y={0} stroke={C.border} strokeWidth={1} strokeDasharray="4 4" />
-              <Area type="monotone" dataKey="cumNet" stroke={cumulativeData[cumulativeData.length - 1].cumNet >= 0 ? C.green : C.red} strokeWidth={2} fill="url(#gradCum)" dot={false} />
-            </AreaChart>
+              <Area type="monotone" dataKey="cumPos" stroke="none" fill="url(#gradPos)" dot={false} legendType="none" />
+              <Area type="monotone" dataKey="cumNeg" stroke="none" fill="url(#gradNeg)" dot={false} legendType="none" />
+              <Line type="monotone" dataKey="cumNet" name="Net" stroke="#ffffff" strokeWidth={2} dot={false} />
+            </ComposedChart>
           </ResponsiveContainer>
         </Card>
       )}
@@ -1023,14 +1265,14 @@ function CashFlow({ data, setData, readonly, onImport }) {
             <span style={{ fontSize: 12 }}>Upload a bank statement or add manually.</span>
           </div>
         )}
-        {top10.map(t => <TxnRow key={t.id} t={t} />)}
+        {top10.map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} />)}
       </Card>
 
       {/* All transactions modal */}
       {showAllTxns && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={() => setShowAllTxns(false)}>
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, width: 700, maxHeight: "82vh", overflowY: "auto" }}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, width: 720, maxHeight: "82vh", overflowY: "auto" }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 15 }}>
@@ -1039,7 +1281,7 @@ function CashFlow({ data, setData, readonly, onImport }) {
               </div>
               <button onClick={() => setShowAllTxns(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>×</button>
             </div>
-            {[...monthTxns].sort((a, b) => b.date.localeCompare(a.date)).map(t => <TxnRow key={t.id} t={t} />)}
+            {[...monthTxns].sort((a, b) => b.date.localeCompare(a.date)).map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} />)}
           </div>
         </div>
       )}
@@ -1665,7 +1907,8 @@ function maybeSnapshotNW(data, setData) {
   }));
 }
 
-function Wealth({ data, setData, readonly, onImport }) {
+function Wealth({ data, setData, readonly, onImport, onOpenChat }) {
+  const isMobile = useIsMobile();
   const [portfolioView, setPortfolioView] = useState("total"); // "total" | "single"
   const [selectedPortfolioId, setSelectedPortfolioId] = useState(() => data.portfolios[0]?.id || null);
 
@@ -1726,7 +1969,7 @@ function Wealth({ data, setData, readonly, onImport }) {
   function BreakdownPies({ pies }) {
     if (!pies.assetClass.length && !pies.region.length) return null;
     return (
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
         {pies.assetClass.length > 0 && (
           <Card>
             <div style={{ fontWeight: 600, marginBottom: 12 }}>By Asset Class</div>
@@ -1759,6 +2002,9 @@ function Wealth({ data, setData, readonly, onImport }) {
     );
   }
 
+  const wealthIsEmpty = allPositions.length === 0 && data.realEstate.length === 0 && data.cashAccounts.length === 0;
+  if (wealthIsEmpty) return <GettingStarted tab="wealth" readonly={readonly} onOpenChat={onOpenChat} />;
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
 
@@ -1788,7 +2034,7 @@ function Wealth({ data, setData, readonly, onImport }) {
 
       {/* ══════ TOTAL VIEW ══════ */}
       {portfolioView === "total" && (<>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 16 }}>
           <Card>
             <Stat label="Net Worth" value={fmtHUF(totalNW)} color={C.accent} />
             {nwChange !== null && (
@@ -1860,7 +2106,7 @@ function Wealth({ data, setData, readonly, onImport }) {
           </button>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
           <Card>
             <div style={{ fontWeight: 600, marginBottom: 12 }}>Real Estate</div>
             {data.realEstate.map(r => (
@@ -1890,7 +2136,7 @@ function Wealth({ data, setData, readonly, onImport }) {
       {/* ══════ BY PORTFOLIO VIEW ══════ */}
       {portfolioView === "single" && selectedPortfolio && (<>
         {/* Per-portfolio stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 16 }}>
           <Card>
             <Stat label="Market Value" value={fmtHUF(selMV)} color={C.blue} />
             <div style={{ textAlign: "center", fontSize: 11, color: C.muted, marginTop: 3 }}>{selPositions.length} position{selPositions.length !== 1 ? "s" : ""}</div>
@@ -1923,7 +2169,7 @@ function Wealth({ data, setData, readonly, onImport }) {
               <ResponsiveContainer width="100%" height={Math.max(120, pnlData.length * 32)}>
                 <BarChart data={pnlData} layout="vertical" margin={{ left: 0, right: 60, top: 0, bottom: 0 }}>
                   <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} width={70} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fill: C.text, fontSize: 11 }} width={80} axisLine={false} tickLine={false} interval={0} />
                   <Tooltip formatter={(v, _, props) => [`${v >= 0 ? "+" : ""}${fmtHUF(v)} (${props.payload?.pct >= 0 ? "+" : ""}${props.payload?.pct}%)`, "Unrealized P&L"]}
                     contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
                   <ReferenceLine x={0} stroke={C.border} strokeWidth={1} />
@@ -2096,31 +2342,21 @@ function BudgetBar({ category, spendInfo, limit, onEdit, onRemove, readonly }) {
 }
 
 // ─── Budget Section (embedded in Costs tab) ───────────────────────────────────
-function BudgetSection({ data, setData, readonly }) {
-  const now = new Date();
-  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const [viewMonth, setViewMonth] = useState(thisMonth);
-
-  const monthLabel = (() => {
-    const [y, m] = viewMonth.split("-").map(Number);
-    return new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
-  })();
-
-  function shiftMonth(delta) {
-    const [y, m] = viewMonth.split("-").map(Number);
-    const d = new Date(y, m - 1 + delta, 1);
-    const nm = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    if (nm <= thisMonth) setViewMonth(nm); // don't go into the future
-  }
-
+function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths }) {
   // Budget targets map
   const targetMap = {};
   (data.budgetTargets || []).forEach(bt => { targetMap[bt.category] = bt.monthlyLimit; });
 
-  // Compute spend info for every expense category
+  // Compute spend info — single month or average across all months
   const spendInfoByCategory = {};
   EXPENSE_CATEGORIES.forEach(cat => {
-    spendInfoByCategory[cat] = computeCategorySpend(data.transactions, cat, viewMonth);
+    if (isAvg && allMonths.length > 0) {
+      const avgActual = allMonths.map(ym => sumExpensesInMonth(data.transactions, cat, ym))
+        .reduce((a, b) => a + b, 0) / allMonths.length;
+      spendInfoByCategory[cat] = { actual: Math.round(avgActual), estimated: 0, isFixed: false, isVariableRecurring: false, hasActualThisMonth: avgActual > 0 };
+    } else {
+      spendInfoByCategory[cat] = computeCategorySpend(data.transactions, cat, viewMonth);
+    }
   });
 
   // Which categories to show: has a target OR has spend/estimate
@@ -2158,28 +2394,16 @@ function BudgetSection({ data, setData, readonly }) {
 
   return (
     <div style={{ display: "grid", gap: 16, marginTop: 8 }}>
-      {/* Month picker + summary stats */}
-      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
-        {/* Month picker */}
-        <Card style={{ padding: "14px 16px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, minWidth: 140 }}>
-          <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>Month</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <button onClick={() => shiftMonth(-1)}
-              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", color: C.muted, cursor: "pointer", fontSize: 14 }}>‹</button>
-            <span style={{ fontWeight: 700, fontSize: 13, color: C.text, whiteSpace: "nowrap" }}>{monthLabel}</span>
-            <button onClick={() => shiftMonth(1)} disabled={viewMonth >= thisMonth}
-              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 9px", color: viewMonth >= thisMonth ? C.border : C.muted, cursor: viewMonth >= thisMonth ? "default" : "pointer", fontSize: 14 }}>›</button>
-          </div>
-          {viewMonth === thisMonth && <div style={{ fontSize: 10, color: C.accent }}>current month</div>}
-        </Card>
-        <Card><Stat label="Spent vs Budgeted" value={`${fmtHUF(totalSpent)} / ${fmtHUF(totalBudgeted)}`} color={totalSpent > totalBudgeted ? C.red : C.text} /></Card>
+      {/* Summary stats — month picker is in Costs tab, shared */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        <Card><Stat label={isAvg ? "Avg Spent vs Budgeted" : "Spent vs Budgeted"} value={`${fmtHUF(totalSpent)} / ${fmtHUF(totalBudgeted)}`} color={totalSpent > totalBudgeted ? C.red : C.text} /></Card>
         <Card><Stat label="Remaining" value={fmtHUF(Math.max(0, totalBudgeted - totalSpent))} color={C.green} /></Card>
         <Card><Stat label="Over budget" value={overCount === 0 ? "✓ None" : `${overCount} categor${overCount === 1 ? "y" : "ies"}`} color={overCount > 0 ? C.red : C.green} /></Card>
       </div>
 
-      {estimateCount > 0 && (
+      {estimateCount > 0 && !isAvg && (
         <div style={{ background: C.orange + "18", border: `1px solid ${C.orange}44`, borderRadius: 8, padding: "8px 14px", fontSize: 12, color: C.orange }}>
-          ⚠ {estimateCount} categor{estimateCount === 1 ? "y uses a" : "ies use"} estimated amounts based on past months — actual bills not yet logged for {monthLabel}.
+          ⚠ {estimateCount} categor{estimateCount === 1 ? "y uses a" : "ies use"} estimated amounts based on past months — actual bills not yet logged this month.
         </div>
       )}
 
@@ -2398,7 +2622,7 @@ const FILE_TYPE_LABELS = {
 };
 
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
-function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport }) {
+function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport, isMobile }) {
   const [messages, setMessages] = useState([]);
   const [history, setHistory] = useState([]);
   const [input, setInput] = useState("");
@@ -2421,14 +2645,17 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
     clearPendingImport?.();
   }, [pendingImport]);
 
+  const chatBottom = isMobile ? 72 : 28;
+  const chatRight = isMobile ? 16 : 28;
+
   // Minimized pill — shows last message, click to expand
   if (!open) return (
     <button onClick={() => setOpen(true)} title="Open AI Assistant"
-      style={{ position: "fixed", bottom: 28, right: 28, width: 52, height: 52, borderRadius: "50%", background: C.accent, border: "none", cursor: "pointer", fontSize: 22, color: "#000", fontWeight: 700, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", zIndex: 100 }}>✦</button>
+      style={{ position: "fixed", bottom: chatBottom, right: chatRight, width: 52, height: 52, borderRadius: "50%", background: C.accent, border: "none", cursor: "pointer", fontSize: 22, color: "#000", fontWeight: 700, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", zIndex: 100 }}>✦</button>
   );
 
   if (minimized) return (
-    <div style={{ position: "fixed", bottom: 28, right: 28, zIndex: 100, display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{ position: "fixed", bottom: chatBottom, right: chatRight, zIndex: 100, display: "flex", alignItems: "center", gap: 8 }}>
       <div onClick={() => setMinimized(false)}
         style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 24, padding: "10px 16px", cursor: "pointer", boxShadow: "0 4px 20px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", gap: 10, maxWidth: 280 }}>
         <span style={{ color: C.accent, fontWeight: 700, fontSize: 15, flexShrink: 0 }}>✦</span>
@@ -2533,8 +2760,14 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
           summary: batch.summary + (dupCount > 0 ? ` · ${dupCount} possible duplicate${dupCount === 1 ? "" : "s"}` : ""),
         });
       }
-    } catch {
-      setMessages(m => [...m, { role: "assistant", content: "Connection error — please try again." }]);
+    } catch (err) {
+      const isNetwork = !navigator.onLine || (err?.message || "").toLowerCase().includes("network") || (err?.message || "").toLowerCase().includes("fetch");
+      setMessages(m => [...m, {
+        role: "assistant",
+        content: isNetwork
+          ? "⚠ No connection — check your internet and try again."
+          : "⚠ Something went wrong. The AI may be temporarily unavailable — please try again in a moment.",
+      }]);
     }
     setLoading(false);
   }
@@ -2615,7 +2848,7 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   const batchColor = { transactions: C.blue, costs: C.purple, positions: C.green, budget_targets: C.accent, savings_goals: C.orange };
 
   return (
-    <div style={{ position: "fixed", bottom: 28, right: 28, width: 430, height: 620, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, display: "flex", flexDirection: "column", zIndex: 100, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
+    <div style={{ position: "fixed", bottom: isMobile ? 0 : 28, right: isMobile ? 0 : 28, left: isMobile ? 0 : "auto", top: isMobile ? 0 : "auto", width: isMobile ? "100%" : 430, height: isMobile ? "100%" : 620, background: C.surface, border: isMobile ? "none" : `1px solid ${C.border}`, borderRadius: isMobile ? 0 : 16, display: "flex", flexDirection: "column", zIndex: 100, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
 
       {/* Header */}
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
@@ -2840,6 +3073,8 @@ export default function App() {
   const [tab, setTab] = useState("costs");
   const [chatOpen, setChatOpen] = useState(false);
   const [pendingImport, setPendingImport] = useState(null); // { name, text, fileType }
+  const [darkMode, setDarkMode] = useState(true);
+  Object.assign(C, darkMode ? DARK_C : LIGHT_C);
 
   function handleImport(file, fileType) {
     setPendingImport({ ...file, fileType });
@@ -2848,6 +3083,8 @@ export default function App() {
   const [data, setDataRaw] = useState(EMPTY_DATA);
   const [householdId, setHouseholdId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); setAuthReady(true); });
@@ -2862,18 +3099,20 @@ export default function App() {
   }, [session, isDemo, authReady]);
 
   async function loadHousehold(id) {
-    const { data: row } = await supabase.from("households").select("id, data").eq("id", id).single();
+    const { data: row, error } = await supabase.from("households").select("id, data").eq("id", id).single();
+    if (error && !row) { setLoadError("Could not load demo data — check your connection."); return; }
     if (row) { setHouseholdId(row.id); setDataRaw(row.data); }
   }
   async function loadOrCreateHousehold(userId) {
-    let { data: row } = await supabase.from("households").select("id, data").eq("user_id", userId).single();
+    let { data: row, error } = await supabase.from("households").select("id, data").eq("user_id", userId).single();
+    if (error && error.code !== "PGRST116") { setLoadError("Could not load your data — check your connection and try refreshing."); return; }
     if (!row) {
-      const { data: newRow } = await supabase.from("households").insert({ user_id: userId, data: EMPTY_DATA }).select().single();
+      const { data: newRow, error: insertErr } = await supabase.from("households").insert({ user_id: userId, data: EMPTY_DATA }).select().single();
+      if (insertErr) { setLoadError("Could not create your account — please try again."); return; }
       row = newRow;
     }
     if (row) { setHouseholdId(row.id); setDataRaw(row.data); }
   }
-  const [saveError, setSaveError] = useState(false);
 
   useEffect(() => {
     if (!householdId || isDemo) return;
@@ -2899,41 +3138,82 @@ export default function App() {
     maybeSnapshotNW(data, setData);
   }, [householdId]);
 
+  const isMobile = useIsMobile();
+
   if (!authReady) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>Loading…</div>;
   if (!session && !isDemo) return <Auth onLogin={() => setIsDemo(true)} />;
 
-  const tabs = [{ id: "costs", label: "Costs" }, { id: "cashflow", label: "Cash Flow" }, { id: "wealth", label: "Wealth" }];
+  const tabs = [
+    { id: "costs",    label: "Costs",     icon: "📋" },
+    { id: "cashflow", label: "Cash Flow",  icon: "💸" },
+    { id: "wealth",   label: "Wealth",     icon: "📈" },
+  ];
   const readonly = isDemo;
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif", colorScheme: darkMode ? "dark" : "light" }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono&display=swap" rel="stylesheet" />
-      <header style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 50 }}>
+
+      {/* ── Header ── */}
+      <header style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: isMobile ? "0 16px" : "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 50 }}>
         <div style={{ fontWeight: 700, fontSize: 18, color: C.accent }}>✦ PFA</div>
-        <nav style={{ display: "flex", gap: 4 }}>
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: "6px 16px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, background: tab === t.id ? C.accent : "transparent", color: tab === t.id ? "#000" : C.muted }}>
-              {t.label}
-            </button>
-          ))}
-        </nav>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {saving && <span style={{ fontSize: 11, color: C.muted }}>Saving…</span>}
-          {saveError && <span style={{ fontSize: 11, color: C.red, cursor: "pointer" }} onClick={() => setSaveError(false)} title="Data may not have saved — check your connection">⚠ Save failed</span>}
+
+        {/* Desktop nav tabs — hidden on mobile */}
+        {!isMobile && (
+          <nav style={{ display: "flex", gap: 4 }}>
+            {tabs.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: "6px 16px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, background: tab === t.id ? C.accent : "transparent", color: tab === t.id ? "#000" : C.muted }}>
+                {t.label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        <div style={{ display: "flex", gap: isMobile ? 6 : 10, alignItems: "center" }}>
+          {saving && !isMobile && <span style={{ fontSize: 11, color: C.muted }}>Saving…</span>}
+          {saveError && <span style={{ fontSize: 11, color: C.red, cursor: "pointer" }} onClick={() => setSaveError(false)} title="Data may not have saved — check your connection">⚠{isMobile ? "" : " Save failed"}</span>}
+          <button onClick={() => setDarkMode(d => !d)} title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 14, color: C.muted, lineHeight: 1 }}>
+            {darkMode ? "☀" : "🌙"}
+          </button>
           {isDemo
-            ? <Btn variant="ghost" onClick={() => setIsDemo(false)} style={{ fontSize: 12 }}>← Sign in</Btn>
-            : <Btn variant="ghost" onClick={signOut} style={{ fontSize: 12 }}>Sign out</Btn>}
-          {readonly && <Tag color={C.orange}>Demo</Tag>}
+            ? <Btn variant="ghost" onClick={() => setIsDemo(false)} style={{ fontSize: 12 }}>{isMobile ? "Login" : "← Sign in"}</Btn>
+            : <Btn variant="ghost" onClick={signOut} style={{ fontSize: 12 }}>{isMobile ? "Out" : "Sign out"}</Btn>}
+          {readonly && !isMobile && <Tag color={C.orange}>Demo</Tag>}
         </div>
       </header>
 
-      <main style={{ padding: "24px clamp(16px, 3vw, 48px)", maxWidth: "min(1600px, 96vw)", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
-        {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
-        {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
-        {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} />}
+      {/* ── Load error banner ── */}
+      {loadError && (
+        <div style={{ background: C.red + "18", borderBottom: `1px solid ${C.red}44`, padding: "10px 24px", display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ color: C.red, fontSize: 16 }}>⚠</span>
+          <span style={{ fontSize: 13, color: C.red, flex: 1 }}>{loadError}</span>
+          <button onClick={() => setLoadError(null)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+        </div>
+      )}
+
+      {/* ── Main content ── */}
+      <main style={{ padding: isMobile ? "16px 12px" : "24px clamp(16px, 3vw, 48px)", maxWidth: "min(1600px, 96vw)", margin: "0 auto", width: "100%", boxSizing: "border-box", paddingBottom: isMobile ? 80 : undefined }}>
+        {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={() => setChatOpen(true)} />}
+        {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={() => setChatOpen(true)} />}
+        {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={() => setChatOpen(true)} />}
       </main>
 
-      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} />
+      {/* ── Bottom tab bar (mobile only) ── */}
+      {isMobile && (
+        <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 64, background: C.surface, borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", zIndex: 60 }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "8px 0", color: tab === t.id ? C.accent : C.muted }}>
+              <span style={{ fontSize: 18, lineHeight: 1 }}>{t.icon}</span>
+              <span style={{ fontSize: 10, fontWeight: tab === t.id ? 700 : 400 }}>{t.label}</span>
+              {tab === t.id && <div style={{ width: 20, height: 2, background: C.accent, borderRadius: 1, marginTop: 1 }} />}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} />
     </div>
   );
 }
