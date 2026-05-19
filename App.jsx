@@ -829,6 +829,22 @@ function CashFlow({ data, setData, readonly, onImport }) {
     return { week: `W${w + 1}`, label: `${wStart}–${wEnd}`, net: Math.round(wInc - wExp), count: wTxns.length };
   }).filter(w => w.count > 0);
 
+  // Cumulative daily net cashflow for selected month
+  const cumulativeData = (() => {
+    const dayTotals = {};
+    monthTxns.forEach(t => {
+      const day = t.date?.slice(8, 10);
+      if (!day) return;
+      const val = t.type === "income" ? toHUF(t.amount, t.currency) : -toHUF(Math.abs(t.amount), t.currency);
+      dayTotals[day] = (dayTotals[day] || 0) + val;
+    });
+    let cum = 0;
+    return Object.keys(dayTotals).sort().map(day => {
+      cum += dayTotals[day];
+      return { day: `${parseInt(day)}`, cumNet: Math.round(cum) };
+    });
+  })();
+
   function addTransaction() {
     if (!form.date || !form.desc || !form.amount) return;
     const amt = form.type === "expense" ? -Math.abs(parseFloat(form.amount)) : Math.abs(parseFloat(form.amount));
@@ -941,6 +957,31 @@ function CashFlow({ data, setData, readonly, onImport }) {
                 {weeklyData.map((entry, i) => <Cell key={i} fill={entry.net >= 0 ? C.green : C.red} />)}
               </Bar>
             </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Cumulative cashflow chart */}
+      {cumulativeData.length > 1 && (
+        <Card>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Cumulative Cashflow</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
+            Running net through the month — {cumulativeData[cumulativeData.length - 1].cumNet >= 0 ? "ended positive" : "ended negative"}
+          </div>
+          <ResponsiveContainer width="100%" height={150}>
+            <AreaChart data={cumulativeData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <defs>
+                <linearGradient id="gradCum" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={cumulativeData[cumulativeData.length - 1].cumNet >= 0 ? C.green : C.red} stopOpacity={0.4} />
+                  <stop offset="95%" stopColor={cumulativeData[cumulativeData.length - 1].cumNet >= 0 ? C.green : C.red} stopOpacity={0.03} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} label={{ value: "day of month", position: "insideBottomRight", offset: -4, style: { fontSize: 10, fill: C.muted } }} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
+              <Tooltip formatter={v => [fmtHUF(v), "Cumulative net"]} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <ReferenceLine y={0} stroke={C.border} strokeWidth={1} strokeDasharray="4 4" />
+              <Area type="monotone" dataKey="cumNet" stroke={cumulativeData[cumulativeData.length - 1].cumNet >= 0 ? C.green : C.red} strokeWidth={2} fill="url(#gradCum)" dot={false} />
+            </AreaChart>
           </ResponsiveContainer>
         </Card>
       )}
@@ -1865,6 +1906,35 @@ function Wealth({ data, setData, readonly, onImport }) {
 
         {/* Breakdown pies for selected portfolio */}
         <BreakdownPies pies={selPies} />
+
+        {/* P&L by position — tax lot diff style */}
+        {selPositions.length > 0 && (() => {
+          const pnlData = selPositions
+            .map(pos => ({
+              name: pos.ticker || pos.name.slice(0, 10),
+              pnl: Math.round(toHUF(pos.qty * (pos.currentPrice - pos.costBasis), pos.currency)),
+              pct: pos.costBasis > 0 ? ((pos.currentPrice - pos.costBasis) / pos.costBasis * 100).toFixed(1) : 0,
+            }))
+            .sort((a, b) => b.pnl - a.pnl);
+          return (
+            <Card>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Unrealized P&amp;L by Position</div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>Cost basis vs current — sorted best to worst</div>
+              <ResponsiveContainer width="100%" height={Math.max(120, pnlData.length * 32)}>
+                <BarChart data={pnlData} layout="vertical" margin={{ left: 0, right: 60, top: 0, bottom: 0 }}>
+                  <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fill: C.muted, fontSize: 11 }} width={70} axisLine={false} tickLine={false} />
+                  <Tooltip formatter={(v, _, props) => [`${v >= 0 ? "+" : ""}${fmtHUF(v)} (${props.payload?.pct >= 0 ? "+" : ""}${props.payload?.pct}%)`, "Unrealized P&L"]}
+                    contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+                  <ReferenceLine x={0} stroke={C.border} strokeWidth={1} />
+                  <Bar dataKey="pnl" radius={[0, 4, 4, 0]}>
+                    {pnlData.map((entry, i) => <Cell key={i} fill={entry.pnl >= 0 ? C.green : C.red} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          );
+        })()}
 
         {/* Portfolio card (positions table) for selected portfolio */}
         <PortfolioCard key={selectedPortfolio.id} portfolio={selectedPortfolio} data={data} setData={setData} readonly={readonly} />
