@@ -2361,6 +2361,12 @@ function BudgetBar({ category, spendInfo, limit, onEdit, onRemove, readonly }) {
 
 // ─── Budget Section (embedded in Costs tab) ───────────────────────────────────
 function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths }) {
+  // Derive monthLabel from viewMonth prop
+  const [_y, _m] = (viewMonth || "2024-01").split("-").map(Number);
+  const monthLabel = isAvg
+    ? `avg (${(allMonths || []).length} month${(allMonths || []).length !== 1 ? "s" : ""})`
+    : new Date(_y, _m - 1, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
+
   // Budget targets map
   const targetMap = {};
   (data.budgetTargets || []).forEach(bt => { targetMap[bt.category] = bt.monthlyLimit; });
@@ -2486,7 +2492,7 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
                   {si.isVariableRecurring && !si.hasActualThisMonth && <Tag color={C.orange}>expected · est.</Tag>}
                 </div>
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span style={{ fontWeight: 600, color: si.isEstimate ? C.orange : C.textSoft }}>
+                  <span style={{ fontWeight: 600, color: (si.estimated > 0) ? C.orange : C.textSoft }}>
                     {fmtHUF(si.actual)}{!si.hasActualThisMonth && si.actual > 0 ? " est." : ""}
                   </span>
                   {!readonly && (
