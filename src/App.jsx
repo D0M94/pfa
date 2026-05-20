@@ -900,6 +900,8 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
   const [showGuide, setShowGuide] = useState(false);
   const [selectedType, setSelectedType] = useState(defaultType || null);
   const [uploadError, setUploadError] = useState(null);
+  const [inputMode, setInputMode] = useState("file"); // "file" | "paste"
+  const [pasteText, setPasteText] = useState("");
   const fileInputRef = useRef(null);
 
   async function processFile(file) {
@@ -1007,26 +1009,75 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
           </div>
         )}
 
-        <div
-          onDragOver={e => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-          onClick={() => (guide || defaultType) && fileInputRef.current?.click()}
-          style={{
-            border: `2px dashed ${dragging ? (guide?.color || C.accent) : C.border}`,
-            borderRadius: 10, padding: "12px 16px", textAlign: "center",
-            cursor: (guide || defaultType) ? "pointer" : "default",
-            background: dragging ? (guide?.color || C.accent) + "11" : "transparent",
-            transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
-          }}>
-          <span style={{ fontSize: 18 }}>📂</span>
-          <span style={{ fontSize: 13, color: C.muted }}>
-            {dragging ? "Drop to import" : "Drag & drop or click to browse"}
-          </span>
-          <div style={{ display: "inline-block", background: guide?.color || C.accent, color: "#000", borderRadius: 7, padding: "5px 14px", fontSize: 12, fontWeight: 600, flexShrink: 0 }}>
-            Choose file
-          </div>
+        {/* Input mode toggle: File | Paste */}
+        <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 3, marginBottom: 12 }}>
+          {[["file","📂 Upload file"], ["paste","📋 Paste text"]].map(([mode, label]) => (
+            <button key={mode} onClick={() => { setInputMode(mode); setUploadError(null); }}
+              style={{ flex: 1, padding: "6px 0", borderRadius: 6, border: "none", cursor: "pointer",
+                fontSize: 12, fontWeight: 600,
+                background: inputMode === mode ? C.surfaceHigh : "transparent",
+                color: inputMode === mode ? C.text : C.muted }}>
+              {label}
+            </button>
+          ))}
         </div>
+
+        {inputMode === "file" ? (
+          <div
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            onClick={() => (guide || defaultType) && fileInputRef.current?.click()}
+            style={{
+              border: `2px dashed ${dragging ? (guide?.color || C.accent) : C.border}`,
+              borderRadius: 10, padding: "12px 16px", textAlign: "center",
+              cursor: (guide || defaultType) ? "pointer" : "default",
+              background: dragging ? (guide?.color || C.accent) + "11" : "transparent",
+              transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
+            }}>
+            <span style={{ fontSize: 18 }}>📂</span>
+            <span style={{ fontSize: 13, color: C.muted }}>
+              {dragging ? "Drop to import" : "Drag & drop or click to browse"}
+            </span>
+            <div style={{ display: "inline-block", background: guide?.color || C.accent, color: "#000", borderRadius: 7, padding: "5px 14px", fontSize: 12, fontWeight: 600, flexShrink: 0 }}>
+              Choose file
+            </div>
+          </div>
+        ) : (
+          <div>
+            <textarea
+              value={pasteText}
+              onChange={e => setPasteText(e.target.value)}
+              placeholder={"Paste your bank statement or transaction list here.\n\nWorks with anything: copied table from your bank's website, exported text, or just a list of lines like:\n  2026-05-10  Spar supermarket  -4500\n  2026-05-11  Salary  +450000"}
+              style={{
+                width: "100%", minHeight: 140, background: C.bg, border: `1px solid ${C.border}`,
+                borderRadius: 10, padding: 12, color: C.text, fontSize: 12, fontFamily: "'DM Mono', monospace",
+                outline: "none", resize: "vertical", boxSizing: "border-box", lineHeight: 1.6, colorScheme: "dark",
+              }}
+            />
+            <button
+              onClick={() => {
+                if (!pasteText.trim()) return;
+                onFileReady({ name: "pasted_text.txt", text: pasteText.trim() }, selectedType || defaultType);
+                setPasteText("");
+                setExpanded(false);
+              }}
+              disabled={!pasteText.trim() || !(selectedType || defaultType)}
+              style={{
+                marginTop: 8, width: "100%", padding: "10px 0", borderRadius: 8, border: "none",
+                background: pasteText.trim() && (selectedType || defaultType) ? (guide?.color || C.accent) : C.border,
+                color: pasteText.trim() && (selectedType || defaultType) ? "#000" : C.muted,
+                fontSize: 13, fontWeight: 600, cursor: pasteText.trim() && (selectedType || defaultType) ? "pointer" : "not-allowed",
+              }}>
+              Import from pasted text →
+            </button>
+            {!(selectedType || defaultType) && (
+              <div style={{ fontSize: 11, color: C.orange, marginTop: 6, textAlign: "center" }}>
+                Select an import type above first
+              </div>
+            )}
+          </div>
+        )}
         <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={onPick} style={{ display: "none" }} />
 
         {uploadError && (
@@ -2645,6 +2696,345 @@ const FILE_TYPE_LABELS = {
   cost_list: "Cost / bill list",
 };
 
+// ─── Monthly Sweep Wizard ─────────────────────────────────────────────────────
+function MonthlySweep({ data, setData, onClose, thisMonth }) {
+  const [step, setStep] = useState(0);
+
+  const [y, m] = thisMonth.split("-").map(Number);
+  const monthLabel = new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
+
+  const recurring = (data.costs || []).filter(c => c.type === "recurring");
+  const [checked, setChecked] = useState(() =>
+    Object.fromEntries(recurring.map(c => [c.id, true]))
+  );
+
+  // Last month reference income
+  const lastMonthYM = (() => {
+    const d = new Date(y, m - 2, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  })();
+  const lastIncome = (data.transactions || [])
+    .filter(t => t.date?.startsWith(lastMonthYM) && t.type === "income")
+    .reduce((s, t) => s + toHUF(Math.abs(t.amount), t.currency), 0);
+
+  const [includeIncome, setIncludeIncome] = useState(false);
+  const [incomeAmount, setIncomeAmount] = useState(lastIncome > 0 ? String(Math.round(lastIncome)) : "");
+  const [incomeDesc, setIncomeDesc] = useState("Salary");
+
+  const selectedCosts = recurring.filter(c => checked[c.id]);
+  const totalSelected = selectedCosts.reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
+
+  function commit() {
+    const costTxns = selectedCosts.map((c, i) => ({
+      id: `t_sweep_${Date.now()}_${i}`,
+      date: `${thisMonth}-01`,
+      desc: c.name,
+      amount: -Math.abs(c.amount),
+      currency: c.currency || "HUF",
+      category: c.category || "Other",
+      type: "expense",
+      account: "Manual",
+    }));
+    const incomeAmt = parseFloat(incomeAmount);
+    const incomeTxns = includeIncome && incomeAmt > 0 ? [{
+      id: `t_sweep_inc_${Date.now()}`,
+      date: `${thisMonth}-01`,
+      desc: incomeDesc.trim() || "Salary",
+      amount: Math.abs(incomeAmt),
+      currency: "HUF",
+      category: "Income",
+      type: "income",
+      account: "Manual",
+    }] : [];
+    setData(d => ({ ...d, transactions: [...incomeTxns, ...costTxns, ...d.transactions] }));
+    onClose();
+  }
+
+  const overlayStyle = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 };
+  const modalStyle = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, width: "100%", maxWidth: 440, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 8px 48px rgba(0,0,0,0.5)" };
+
+  // Step 0 — Recurring cost confirmation
+  if (step === 0) return (
+    <div style={overlayStyle} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={modalStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>📅 Monthly Check-in</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 22, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 18 }}>{monthLabel} · Tick the costs you actually paid this month</div>
+
+        {recurring.length === 0 ? (
+          <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "24px 0" }}>No recurring costs set up yet.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+            {recurring.map(c => (
+              <div key={c.id} onClick={() => setChecked(ch => ({ ...ch, [c.id]: !ch[c.id] }))}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12,
+                  padding: "10px 12px", borderRadius: 10, cursor: "pointer",
+                  border: `1.5px solid ${checked[c.id] ? C.accent + "66" : C.border}`,
+                  background: checked[c.id] ? C.accent + "11" : C.bg,
+                  transition: "all 0.12s",
+                }}>
+                <div style={{
+                  width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+                  border: `2px solid ${checked[c.id] ? C.accent : C.muted}`,
+                  background: checked[c.id] ? C.accent : "transparent",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  {checked[c.id] && <span style={{ color: "#000", fontSize: 11, fontWeight: 800, lineHeight: 1 }}>✓</span>}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div>
+                  <div style={{ fontSize: 11, color: C.muted }}>{c.category} · {c.frequency}</div>
+                </div>
+                <div style={{ fontWeight: 600, fontSize: 13, color: checked[c.id] ? C.red : C.muted, flexShrink: 0 }}>
+                  −{fmtHUF(toHUF(c.amount, c.currency))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: C.muted, textAlign: "right", marginBottom: 14 }}>
+          {selectedCosts.length}/{recurring.length} selected · <span style={{ color: C.red }}>{fmtHUF(totalSelected)}</span>
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }}>Skip</Btn>
+          <Btn onClick={() => setStep(1)} style={{ flex: 2 }}>Next: Income →</Btn>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Step 1 — Income
+  return (
+    <div style={overlayStyle} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={modalStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>💵 Income for {monthLabel}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 22, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 18 }}>Optional — log your income for this month</div>
+
+        <div onClick={() => setIncludeIncome(v => !v)}
+          style={{
+            display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
+            borderRadius: 10, cursor: "pointer", marginBottom: 14,
+            border: `1.5px solid ${includeIncome ? C.green + "66" : C.border}`,
+            background: includeIncome ? C.green + "11" : C.bg,
+            transition: "all 0.12s",
+          }}>
+          <div style={{
+            width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+            border: `2px solid ${includeIncome ? C.green : C.muted}`,
+            background: includeIncome ? C.green : "transparent",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            {includeIncome && <span style={{ color: "#000", fontSize: 11, fontWeight: 800, lineHeight: 1 }}>✓</span>}
+          </div>
+          <div style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>Log income this month</div>
+          {lastIncome > 0 && <span style={{ fontSize: 11, color: C.muted }}>Last month: {fmtHUF(lastIncome)}</span>}
+        </div>
+
+        {includeIncome && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <input
+              autoFocus inputMode="numeric" type="number"
+              placeholder={lastIncome > 0 ? String(Math.round(lastIncome)) : "Amount (HUF)"}
+              value={incomeAmount}
+              onChange={e => setIncomeAmount(e.target.value)}
+              style={{ flex: 2, background: C.surfaceHigh, border: `1px solid ${C.green}`, borderRadius: 8,
+                padding: "10px 12px", color: C.text, fontSize: 16, fontWeight: 700, outline: "none" }}
+            />
+            <input
+              placeholder="Label (e.g. Salary)"
+              value={incomeDesc}
+              onChange={e => setIncomeDesc(e.target.value)}
+              style={{ flex: 2, background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8,
+                padding: "10px 12px", color: C.text, fontSize: 13, outline: "none" }}
+            />
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn variant="ghost" onClick={() => setStep(0)} style={{ flex: 1 }}>← Back</Btn>
+          <Btn onClick={commit} style={{ flex: 2 }}>
+            ✓ Log {selectedCosts.length > 0 ? `${selectedCosts.length} cost${selectedCosts.length !== 1 ? "s" : ""}` : ""}
+            {includeIncome && parseFloat(incomeAmount) > 0 ? " + income" : ""}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Quick Add Sheet ──────────────────────────────────────────────────────────
+const CAT_TILES = [
+  { cat: "Food",          icon: "🛒" },
+  { cat: "Transport",     icon: "🚗" },
+  { cat: "Housing",       icon: "🏠" },
+  { cat: "Utilities",     icon: "⚡" },
+  { cat: "Health",        icon: "💊" },
+  { cat: "Entertainment", icon: "🎬" },
+  { cat: "Clothing",      icon: "👔" },
+  { cat: "Education",     icon: "📚" },
+  { cat: "Other",         icon: "📦" },
+  { cat: "Income",        icon: "💵" },
+];
+
+function QuickAdd({ setData, onClose, isMobile }) {
+  const [type, setType] = useState("expense");
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState("Food");
+  const [desc, setDesc] = useState("");
+  const [date, setDate] = useState(todayStr());
+  const [currency, setCurrency] = useState("HUF");
+  const amountRef = useRef(null);
+
+  useEffect(() => { setTimeout(() => amountRef.current?.focus(), 60); }, []);
+  useEffect(() => {
+    if (type === "income") setCategory("Income");
+    else if (category === "Income") setCategory("Food");
+  }, [type]);
+
+  const tiles = type === "income"
+    ? CAT_TILES.filter(t => t.cat === "Income" || t.cat === "Other")
+    : CAT_TILES.filter(t => t.cat !== "Income");
+
+  function commit() {
+    const amt = parseFloat(amount);
+    if (!amt || amt <= 0) return;
+    setData(d => ({
+      ...d,
+      transactions: [{
+        id: `t_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        date,
+        desc: desc.trim() || category,
+        amount: type === "expense" ? -Math.abs(amt) : Math.abs(amt),
+        currency,
+        category,
+        type,
+        account: "Manual",
+      }, ...d.transactions],
+    }));
+    onClose();
+  }
+
+  const accentColor = type === "expense" ? C.red : C.green;
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div onClick={onClose}
+        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 200 }} />
+
+      {/* Sheet / Modal */}
+      <div style={{
+        position: "fixed", zIndex: 201,
+        ...(isMobile
+          ? { bottom: 0, left: 0, right: 0, borderRadius: "20px 20px 0 0", maxHeight: "88vh", overflowY: "auto" }
+          : { top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 420, borderRadius: 16 }),
+        background: C.surface, border: `1px solid ${C.border}`,
+        boxShadow: "0 -8px 48px rgba(0,0,0,0.5)", padding: 24,
+      }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>⚡ Quick Add</div>
+          <button onClick={onClose}
+            style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 22, lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Expense / Income toggle */}
+        <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, marginBottom: 18 }}>
+          {[["expense","Expense"], ["income","Income"]].map(([val, label]) => (
+            <button key={val} onClick={() => setType(val)} style={{
+              flex: 1, padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer",
+              fontWeight: 600, fontSize: 13, transition: "all 0.15s",
+              background: type === val ? (val === "expense" ? C.red : C.green) : "transparent",
+              color: type === val ? "#fff" : C.muted,
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {/* Amount row */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <input
+            ref={amountRef}
+            inputMode="decimal"
+            type="number"
+            placeholder="0"
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && commit()}
+            style={{
+              flex: 1, background: C.surfaceHigh,
+              border: `1px solid ${amount && parseFloat(amount) > 0 ? accentColor : C.border}`,
+              borderRadius: 10, padding: "14px 16px", color: C.text, fontSize: 26,
+              fontWeight: 700, outline: "none", fontFamily: "'DM Mono', monospace",
+              transition: "border-color 0.15s",
+            }}
+          />
+          <select value={currency} onChange={e => setCurrency(e.target.value)}
+            style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 10,
+              padding: "0 14px", color: C.text, fontSize: 14, fontWeight: 600, outline: "none",
+              cursor: "pointer", minWidth: 70 }}>
+            {["HUF","EUR","USD"].map(c => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+
+        {/* Category grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 16 }}>
+          {tiles.map(({ cat, icon }) => (
+            <button key={cat} onClick={() => setCategory(cat)} style={{
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+              padding: "10px 4px", borderRadius: 10,
+              border: `1.5px solid ${category === cat ? accentColor : C.border}`,
+              background: category === cat ? accentColor + "22" : C.bg,
+              cursor: "pointer", transition: "all 0.12s",
+            }}>
+              <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
+              <span style={{ fontSize: 9, color: category === cat ? C.text : C.muted, fontWeight: category === cat ? 700 : 400 }}>{cat}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Description + date */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+          <input
+            placeholder="Description (optional)"
+            value={desc}
+            onChange={e => setDesc(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && commit()}
+            style={{ flex: 1, background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8,
+              padding: "9px 12px", color: C.text, fontSize: 13, outline: "none" }}
+          />
+          <input
+            type="date" value={date} onChange={e => setDate(e.target.value)}
+            style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8,
+              padding: "9px 10px", color: C.text, fontSize: 12, outline: "none", width: 130,
+              colorScheme: "dark" }}
+          />
+        </div>
+
+        {/* Commit */}
+        <button onClick={commit}
+          disabled={!amount || parseFloat(amount) <= 0}
+          style={{
+            width: "100%", padding: "14px 0", borderRadius: 10, border: "none",
+            background: amount && parseFloat(amount) > 0 ? accentColor : C.border,
+            color: amount && parseFloat(amount) > 0 ? "#fff" : C.muted,
+            fontSize: 15, fontWeight: 700, cursor: amount && parseFloat(amount) > 0 ? "pointer" : "not-allowed",
+            transition: "all 0.15s",
+          }}>
+          {type === "expense" ? "− Log Expense" : "+ Log Income"}
+        </button>
+      </div>
+    </>
+  );
+}
+
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
 function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport, isMobile }) {
   const [messages, setMessages] = useState([]);
@@ -3123,6 +3513,9 @@ function AppInner() {
   const [authReady, setAuthReady] = useState(false);
   const [tab, setTab] = useState("costs");
   const [chatOpen, setChatOpen] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [sweepOpen, setSweepOpen] = useState(false);
+  const [sweepDismissed, setSweepDismissed] = useState(false);
   const [pendingImport, setPendingImport] = useState(null); // { name, text, fileType }
   const [darkMode, setDarkMode] = useState(true);
   Object.assign(C, darkMode ? DARK_C : LIGHT_C);
@@ -3201,6 +3594,19 @@ function AppInner() {
   ];
   const readonly = isDemo;
 
+  // Monthly Sweep detection
+  const sweepThisMonth = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  })();
+  const sweepMonthLabel = (() => {
+    const [sy, sm] = sweepThisMonth.split("-").map(Number);
+    return new Date(sy, sm - 1, 1).toLocaleString("en-GB", { month: "long" });
+  })();
+  const hasTransactionsThisMonth = (data.transactions || []).some(t => t.date?.startsWith(sweepThisMonth));
+  const hasRecurringCosts = (data.costs || []).some(c => c.type === "recurring");
+  const showSweepBanner = !readonly && householdId && hasRecurringCosts && !hasTransactionsThisMonth && !sweepDismissed && !sweepOpen;
+
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif", colorScheme: darkMode ? "dark" : "light" }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono&display=swap" rel="stylesheet" />
@@ -3243,6 +3649,24 @@ function AppInner() {
         </div>
       )}
 
+      {/* ── Monthly Sweep banner ── */}
+      {showSweepBanner && (
+        <div style={{ background: C.accent + "18", borderBottom: `1px solid ${C.accent}44`, padding: "10px 24px", display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 16 }}>📅</span>
+          <span style={{ fontSize: 13, color: C.text, flex: 1 }}>
+            No transactions logged yet for <strong>{sweepMonthLabel}</strong> — run your monthly check-in to confirm recurring costs.
+          </span>
+          <Btn onClick={() => setSweepOpen(true)} style={{ fontSize: 12, padding: "5px 14px", flexShrink: 0 }}>Start check-in</Btn>
+          <button onClick={() => setSweepDismissed(true)}
+            style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 18, lineHeight: 1, padding: "0 4px", flexShrink: 0 }}>×</button>
+        </div>
+      )}
+
+      {/* ── Monthly Sweep modal ── */}
+      {sweepOpen && !readonly && (
+        <MonthlySweep data={data} setData={setData} onClose={() => setSweepOpen(false)} thisMonth={sweepThisMonth} />
+      )}
+
       {/* ── Main content ── */}
       <main style={{ padding: isMobile ? "16px 12px" : "24px clamp(16px, 3vw, 48px)", maxWidth: "min(1600px, 96vw)", margin: "0 auto", width: "100%", boxSizing: "border-box", paddingBottom: isMobile ? 80 : undefined }}>
         {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={() => setChatOpen(true)} />}
@@ -3262,6 +3686,25 @@ function AppInner() {
             </button>
           ))}
         </nav>
+      )}
+
+      {/* ── Quick Add FAB (bottom-left, mirrors AI chat FAB) ── */}
+      {!readonly && (
+        <button onClick={() => setQuickAddOpen(true)} title="Quick Add"
+          style={{
+            position: "fixed",
+            bottom: isMobile ? 72 : 28,
+            left: 28,
+            width: 52, height: 52, borderRadius: "50%",
+            background: C.surfaceHigh, border: `1.5px solid ${C.border}`,
+            cursor: "pointer", fontSize: 22, color: C.text, fontWeight: 700,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.4)", zIndex: 100,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>+</button>
+      )}
+
+      {quickAddOpen && !readonly && (
+        <QuickAdd setData={setData} onClose={() => setQuickAddOpen(false)} isMobile={isMobile} />
       )}
 
       <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} />
