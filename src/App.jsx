@@ -2428,7 +2428,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
             const broker = prompt("Provider / broker name:");
             setData(d => ({ ...d, portfolios: [...d.portfolios, { id: `p_${Date.now()}`, name, broker: broker || "", currency: "USD", description: "", positions: [] }] }));
           }} style={{ background: "none", border: `2px dashed ${C.border}`, borderRadius: 12, padding: 16, color: C.muted, cursor: "pointer", fontSize: 13, width: "100%", textAlign: "center" }}>
-            + Add sub-portfolio (IBKR, Erste, Revolut…)
+            + Add portfolio (IBKR, Revolut, Erste…)
           </button>
         )}
 
@@ -2438,7 +2438,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontWeight: 600 }}>Real Estate</div>
-              {!readonly && <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>✦ AI chat works too</span>}
+              {!readonly && <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>✦ Add via chat</span>}
             </div>
 
             {data.realEstate.map(r => {
@@ -2523,7 +2523,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontWeight: 600 }}>Cash Accounts</div>
-              {!readonly && <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>✦ AI chat works too</span>}
+              {!readonly && <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>✦ Add via chat</span>}
             </div>
 
             {data.cashAccounts.map(a => {
@@ -2971,7 +2971,7 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
         {trackedCats.length === 0 && addingFor !== "new" && (
           <div style={{ color: C.muted, fontSize: 13, padding: "24px 0", textAlign: "center" }}>
             No budget targets set yet.<br />
-            <span style={{ fontSize: 12 }}>Add one above, or ask the AI: "suggest budget targets based on my spending"</span>
+            <span style={{ fontSize: 12 }}>Add one above, or ask the chat: "suggest budget targets based on my spending"</span>
           </div>
         )}
 
