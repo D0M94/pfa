@@ -15,8 +15,8 @@ const supabase = createClient(
 const DEMO_ID = import.meta.env.VITE_DEMO_HOUSEHOLD_ID;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const EUR_HUF = 395;
-const USD_HUF = 360;
+const EUR_HUF = 358;
+const USD_HUF = 310;
 
 const DARK_C = {
   bg: "#0f0f11", surface: "#18181c", surfaceHigh: "#222228", border: "#2a2a32",
@@ -468,7 +468,7 @@ function EditableTxnRow({ t, readonly, setData }) {
 }
 
 // ─── Getting Started Empty State ──────────────────────────────────────────────
-function GettingStarted({ tab, readonly, onOpenChat, onOpenUpload }) {
+function GettingStarted({ tab, readonly, onOpenChat, onOpenUpload, onAddRealEstate, onAddCash }) {
   const [hovered, setHovered] = useState(null);
   const configs = {
     costs: {
@@ -486,7 +486,7 @@ function GettingStarted({ tab, readonly, onOpenChat, onOpenUpload }) {
       title: "See your monthly cash flow",
       subtitle: "Import your bank statement to automatically track income and expenses.",
       steps: [
-        { icon: "🏦", text: "Upload your bank CSV (Revolut, OTP, Erste supported)", action: { type: "upload" } },
+        { icon: "🏦", text: "Upload your transactions (without sensitive data)", action: { type: "upload" } },
         { icon: "💬", text: "Tell the AI: \"I spent 8500 HUF on lunch today\"", action: { type: "chat", message: "I spent 8500 HUF on lunch today" } },
         { icon: "💬", text: "Or: \"I got paid 850,000 HUF salary this month\"", action: { type: "chat", message: "I got paid 850,000 HUF salary this month" } },
       ],
@@ -496,9 +496,9 @@ function GettingStarted({ tab, readonly, onOpenChat, onOpenUpload }) {
       title: "Track your net worth",
       subtitle: "Add your investments, real estate, and cash accounts for a complete wealth picture.",
       steps: [
-        { icon: "📦", text: "Create a portfolio and add positions (IBKR, Erste…)", action: { type: "chat", message: "I want to create a new investment portfolio" } },
-        { icon: "🏠", text: "Add real estate with current value and mortgage", action: { type: "chat", message: "Add real estate with current value and mortgage" } },
-        { icon: "💰", text: "Add a cash or savings account", action: { type: "chat", message: "Add a cash account" } },
+        { icon: "📤", text: "Upload your portfolios using file import", action: { type: "upload" } },
+        { icon: "🏠", text: "Add real estate — enter property value, mortgage, and equity.", hint: "You can also tell the AI: \"I own a flat worth 45M HUF with 18M mortgage\"", action: { type: "chat", message: "Add real estate with current value and mortgage" }, manualKey: "re" },
+        { icon: "💰", text: "Add cash or savings accounts — bank, brokerage, or cash holdings.", hint: "Or tell the AI: \"I have 2M HUF in OTP bank and €5,000 in Revolut\"", action: { type: "chat", message: "Add a cash account" }, manualKey: "cash" },
       ],
     },
   };
@@ -522,31 +522,49 @@ function GettingStarted({ tab, readonly, onOpenChat, onOpenUpload }) {
         {cfg.steps.map((s, i) => {
           const isUpload = s.action?.type === "upload";
           const isActive = !readonly;
+          const hasManual = !!s.manualKey && isActive;
           return (
-            <button
+            <div
               key={i}
-              onClick={() => handleStep(s.action)}
-              onMouseEnter={() => setHovered(i)}
-              onMouseLeave={() => setHovered(null)}
-              disabled={readonly}
               style={{
-                display: "flex", alignItems: "center", gap: 12,
                 background: hovered === i && isActive ? C.surfaceHigh : C.surface,
                 border: `1px solid ${hovered === i && isActive ? C.accent : C.border}`,
-                borderRadius: 10, padding: "12px 16px", textAlign: "left",
-                cursor: isActive ? "pointer" : "default",
-                width: "100%", transition: "border-color 0.15s, background 0.15s",
-                outline: "none",
+                borderRadius: 10, textAlign: "left",
+                transition: "border-color 0.15s, background 0.15s",
               }}
             >
-              <span style={{ fontSize: 18, flexShrink: 0 }}>{s.icon}</span>
-              <span style={{ fontSize: 13, color: hovered === i && isActive ? C.text : C.textSoft, flex: 1, transition: "color 0.15s" }}>{s.text}</span>
-              {isActive && (
-                <span style={{ fontSize: 11, color: hovered === i ? C.accent : C.muted, flexShrink: 0, fontWeight: 600, transition: "color 0.15s" }}>
-                  {isUpload ? "Upload ↑" : "Try it →"}
-                </span>
+              {/* Main clickable row */}
+              <button
+                onClick={() => handleStep(s.action)}
+                onMouseEnter={() => setHovered(i)}
+                onMouseLeave={() => setHovered(null)}
+                disabled={readonly}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12,
+                  padding: "12px 16px", width: "100%", background: "none", border: "none",
+                  cursor: isActive ? "pointer" : "default", outline: "none", borderRadius: 10,
+                }}
+              >
+                <span style={{ fontSize: 18, flexShrink: 0 }}>{s.icon}</span>
+                <span style={{ fontSize: 13, color: hovered === i && isActive ? C.text : C.textSoft, flex: 1, transition: "color 0.15s", textAlign: "left" }}>{s.text}</span>
+                {isActive && (
+                  <span style={{ fontSize: 11, color: hovered === i ? C.accent : C.muted, flexShrink: 0, fontWeight: 600, transition: "color 0.15s" }}>
+                    {isUpload ? "Upload ↑" : "Try it →"}
+                  </span>
+                )}
+              </button>
+              {/* Extra row for manual-add tiles */}
+              {hasManual && (
+                <div style={{ padding: "0 16px 12px 46px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    onClick={() => { s.manualKey === "re" ? onAddRealEstate?.() : onAddCash?.(); }}
+                    style={{ background: C.accent, border: "none", borderRadius: 7, padding: "5px 14px", fontSize: 12, fontWeight: 700, color: "#000", cursor: "pointer" }}>
+                    + Add manually
+                  </button>
+                  {s.hint && <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>{s.hint}</span>}
+                </div>
               )}
-            </button>
+            </div>
           );
         })}
       </div>
@@ -1622,11 +1640,13 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
   const [addingPos, setAddingPos] = useState(false);
   const [form, setForm] = useState(EMPTY_POSITION);
   const [editingPosId, setEditingPosId] = useState(null);
+  const [inlineEdit, setInlineEdit] = useState(false); // true = inline edit, false = add at bottom
   const [editingPortfolio, setEditingPortfolio] = useState(false);
   const [portfolioForm, setPortfolioForm] = useState({ name: portfolio.name, broker: portfolio.broker || "" });
   const [closingPosId, setClosingPosId] = useState(null);
   const [closeForm, setCloseForm] = useState({ exitDate: "", exitPrice: "", qtyToClose: "" });
   const [closedNote, setClosedNote] = useState(null); // { realized, label }
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
   function openClose(pos) {
     setClosingPosId(pos.id);
@@ -1697,17 +1717,20 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
     }));
     setAddingPos(false);
     setEditingPosId(null);
+    setInlineEdit(false);
     setForm(EMPTY_POSITION);
   }
 
   function startEditPos(pos) {
     setForm({ ...EMPTY_POSITION, ...pos, qty: String(pos.qty), costBasis: String(pos.costBasis), currentPrice: String(pos.currentPrice), marketValue: String(pos.qty * pos.currentPrice) });
     setEditingPosId(pos.id);
-    setAddingPos(true);
+    setInlineEdit(true);
+    setAddingPos(false);
   }
 
   function deletePos(posId) {
     setData(d => ({ ...d, portfolios: d.portfolios.map(p => p.id === portfolio.id ? { ...p, positions: p.positions.filter(x => x.id !== posId) } : p) }));
+    setConfirmDeleteId(null);
   }
 
   function deletePortfolio() {
@@ -1757,8 +1780,8 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
         )}
       </div>
 
-      {/* Column headers */}
-      <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr auto", gap: 8, padding: "4px 0 8px", borderBottom: `1px solid ${C.border}` }}>
+      {/* Column headers — fixed last column to match data rows */}
+      <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 96px", gap: 8, padding: "4px 0 8px", borderBottom: `1px solid ${C.border}` }}>
         {["Position", "Qty × Price", "Market Value", "Cost Basis", "P&L", ""].map(h => (
           <span key={h} style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
         ))}
@@ -1771,14 +1794,63 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
         const pnl = marketVal - costVal;
         const pnlPct = costVal > 0 ? ((pnl / costVal) * 100).toFixed(1) : "—";
         const pnlColor = pnl >= 0 ? C.green : C.red;
-        const hasISIN = pos.isin;
-        const hasTicker = pos.ticker;
+
+        // Inline edit form replaces this row when editing
+        if (inlineEdit && editingPosId === pos.id && !readonly) {
+          return (
+            <div key={pos.id} style={{ background: C.bg, border: `1px solid ${C.accent}55`, borderRadius: 10, padding: 16, margin: "6px 0" }}>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 12, color: C.accent }}>
+                Edit position
+                <span style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginLeft: 8 }}>Fill at least 2 of: Qty, Purchase Price, Current Price</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                {F("Asset Name *", "name", { required: true, placeholder: "e.g. iShares MSCI World" })}
+                {F("Ticker", "ticker", { placeholder: "e.g. IWDA" })}
+                {F("ISIN", "isin", { placeholder: "e.g. IE00B4L5Y983" })}
+                {F("Asset Class", "assetClass", { options: ["ETF", "Stock", "Bond", "Crypto", "Fund", "Other"] })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 8, marginBottom: 8 }}>
+                {F("Region", "region", { options: ["Global", "EU", "US", "EM", "Asia", "Other"] })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                {F("Quantity", "qty", { type: "number", placeholder: "# shares / units" })}
+                {F("Purchase Price", "costBasis", { type: "number", placeholder: "price paid per unit" })}
+                {F("Current Price", "currentPrice", { type: "number", placeholder: "price today per unit" })}
+                {F("Market Value", "marketValue", { type: "number", placeholder: "or total value today" })}
+                {F("Currency", "currency", { options: ["USD", "EUR", "HUF", "GBP", "CHF", "Other"] })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8, marginBottom: 12 }}>
+                {F("Purchase Date", "purchaseDate", { type: "date" })}
+                {F("Notes", "notes", { placeholder: "optional free text" })}
+              </div>
+              {(() => {
+                const d = derivePosition(form);
+                const qty = parseFloat(d.qty) || 0;
+                const cp = parseFloat(d.currentPrice) || 0;
+                const cb = parseFloat(d.costBasis) || 0;
+                const mv = qty * cp;
+                const cost = qty * cb;
+                if (qty && cp) return (
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, padding: "6px 10px", background: C.surfaceHigh, borderRadius: 6 }}>
+                    Preview: {qty} units × {cp} {form.currency} = <strong style={{ color: C.text }}>{fmtHUF(toHUF(mv, form.currency))}</strong>
+                    {cb > 0 && <> · P&L: <strong style={{ color: mv > cost ? C.green : C.red }}>{mv > cost ? "+" : ""}{fmtHUF(toHUF(mv - cost, form.currency))}</strong></>}
+                  </div>
+                );
+                return null;
+              })()}
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn onClick={savePosition}>Save changes</Btn>
+                <Btn variant="ghost" onClick={() => { setInlineEdit(false); setEditingPosId(null); setForm(EMPTY_POSITION); }}>Cancel</Btn>
+              </div>
+            </div>
+          );
+        }
+
         return (
-          <div key={pos.id} style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr auto", gap: 8, alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+          <div key={pos.id} style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 96px", gap: 8, alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
             <div>
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 2 }}>
-                {hasTicker && <Tag color={C.blue}>{pos.ticker}</Tag>}
-                {hasISIN && <span style={{ fontSize: 10, color: C.muted, fontFamily: "monospace" }}>{pos.isin}</span>}
+                {pos.ticker && <Tag color={C.blue}>{pos.ticker}</Tag>}
                 <span style={{ fontSize: 12, fontWeight: 500 }}>{pos.name}</span>
               </div>
               <div style={{ fontSize: 10, color: C.muted }}>{pos.assetClass} · {pos.region} · {pos.currency}{pos.purchaseDate ? ` · bought ${pos.purchaseDate}` : ""}</div>
@@ -1793,12 +1865,12 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
             </div>
             {!readonly && (
               <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <button onClick={() => startEditPos(pos)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>✎</button>
+                <button onClick={() => startEditPos(pos)} title="Edit position" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, padding: "3px 5px" }}>✎</button>
                 <button onClick={() => openClose(pos)}
                   style={{ background: "none", border: `1px solid ${C.orange}55`, borderRadius: 5, padding: "2px 7px", color: C.orange, cursor: "pointer", fontSize: 10, fontWeight: 600 }}>
                   Close
                 </button>
-                <button onClick={() => deletePos(pos.id)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
+                <button onClick={() => setConfirmDeleteId(pos.id)} title="Delete position" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14, padding: "3px 5px" }}>×</button>
               </div>
             )}
           </div>
@@ -1807,7 +1879,7 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
 
       {/* Totals row */}
       {portfolio.positions.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr auto", gap: 8, padding: "10px 0 4px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 96px", gap: 8, padding: "10px 0 4px" }}>
           <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Total</span>
           <span />
           <span style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>{fmtHUF(totalMV)}</span>
@@ -1820,11 +1892,11 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
         </div>
       )}
 
-      {/* Add position form */}
-      {addingPos && !readonly && (
+      {/* Add position form (new positions only — edits are inline above) */}
+      {addingPos && !inlineEdit && !readonly && (
         <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginTop: 12 }}>
           <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 12, color: C.accent }}>
-            {editingPosId ? "Edit position" : "Add position"}
+            Add position
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 400, marginLeft: 8 }}>Fill at least 2 of: Qty, Purchase Price, Current Price</span>
           </div>
 
@@ -1877,15 +1949,15 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
           })()}
 
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={savePosition}>{editingPosId ? "Save changes" : "Add position"}</Btn>
-            <Btn variant="ghost" onClick={() => { setAddingPos(false); setEditingPosId(null); setForm(EMPTY_POSITION); }}>Cancel</Btn>
+            <Btn onClick={savePosition}>Add position</Btn>
+            <Btn variant="ghost" onClick={() => { setAddingPos(false); setInlineEdit(false); setEditingPosId(null); setForm(EMPTY_POSITION); }}>Cancel</Btn>
           </div>
         </div>
       )}
 
       {/* Add position button */}
-      {!readonly && !addingPos && (
-        <button onClick={() => { setAddingPos(true); setEditingPosId(null); setForm(EMPTY_POSITION); }}
+      {!readonly && !addingPos && !inlineEdit && (
+        <button onClick={() => { setAddingPos(true); setInlineEdit(false); setEditingPosId(null); setForm(EMPTY_POSITION); }}
           style={{ marginTop: 12, background: "none", border: `1px dashed ${C.border}`, borderRadius: 8, padding: "8px 16px", color: C.muted, cursor: "pointer", fontSize: 12, width: "100%" }}>
           + Add position
         </button>
@@ -1956,6 +2028,28 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
         </div>
       );
     })()}
+
+    {/* Delete confirmation modal */}
+    {confirmDeleteId && (() => {
+      const pos = portfolio.positions.find(p => p.id === confirmDeleteId);
+      if (!pos) return null;
+      return (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => setConfirmDeleteId(null)}>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, width: 360, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Delete position?</div>
+            <div style={{ fontSize: 13, color: C.textSoft, marginBottom: 20 }}>
+              This will permanently remove <strong>{pos.ticker || pos.name}</strong> ({pos.qty} units) from your portfolio. This cannot be undone.
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <Btn variant="danger" onClick={() => deletePos(confirmDeleteId)} style={{ flex: 1 }}>Yes, delete</Btn>
+              <Btn variant="ghost" onClick={() => setConfirmDeleteId(null)} style={{ flex: 1 }}>Cancel</Btn>
+            </div>
+          </div>
+        </div>
+      );
+    })()}
   </>
   );
 }
@@ -2005,6 +2099,10 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
   const isMobile = useIsMobile();
   const [portfolioView, setPortfolioView] = useState("total"); // "total" | "single"
   const [selectedPortfolioId, setSelectedPortfolioId] = useState(() => data.portfolios[0]?.id || null);
+  const [showREForm, setShowREForm] = useState(false);
+  const [showCashForm, setShowCashForm] = useState(false);
+  const [reForm, setREForm] = useState({ name: "", address: "", currentValue: "", mortgage: "", currency: "HUF", purchaseYear: new Date().getFullYear() });
+  const [cashForm, setCashForm] = useState({ name: "", balance: "", currency: "HUF", type: "Savings" });
 
   const allPositions = data.portfolios.flatMap(p =>
     p.positions.map(pos => ({ ...pos, portfolioName: p.name }))
@@ -2097,7 +2195,98 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
   }
 
   const wealthIsEmpty = allPositions.length === 0 && data.realEstate.length === 0 && data.cashAccounts.length === 0;
-  if (wealthIsEmpty) return <GettingStarted tab="wealth" readonly={readonly} onOpenChat={onOpenChat} onOpenUpload={onOpenUpload} />;
+
+  function saveRE() {
+    if (!reForm.name || !reForm.currentValue) return;
+    setData(d => ({ ...d, realEstate: [...d.realEstate, { id: `re_${Date.now()}`, name: reForm.name, address: reForm.address, currentValue: Number(reForm.currentValue), mortgage: Number(reForm.mortgage) || 0, currency: reForm.currency, purchaseYear: Number(reForm.purchaseYear) }] }));
+    setREForm({ name: "", address: "", currentValue: "", mortgage: "", currency: "HUF", purchaseYear: new Date().getFullYear() });
+    setShowREForm(false);
+  }
+
+  function saveCash() {
+    if (!cashForm.name || !cashForm.balance) return;
+    setData(d => ({ ...d, cashAccounts: [...d.cashAccounts, { id: `ca_${Date.now()}`, name: cashForm.name, balance: Number(cashForm.balance), currency: cashForm.currency, type: cashForm.type }] }));
+    setCashForm({ name: "", balance: "", currency: "HUF", type: "Savings" });
+    setShowCashForm(false);
+  }
+
+  if (wealthIsEmpty && !showREForm && !showCashForm) return (
+    <GettingStarted tab="wealth" readonly={readonly} onOpenChat={onOpenChat} onOpenUpload={onOpenUpload}
+      onAddRealEstate={() => setShowREForm(true)} onAddCash={() => setShowCashForm(true)} />
+  );
+
+  // Quick-add modals shown before any wealth data exists
+  if (wealthIsEmpty) return (
+    <div style={{ display: "grid", gap: 16, maxWidth: 560, margin: "0 auto", padding: "32px 16px" }}>
+      <button onClick={() => { setShowREForm(false); setShowCashForm(false); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, textAlign: "left", padding: 0, marginBottom: 4 }}>← Back</button>
+      {showREForm && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>🏠 Add Real Estate</div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 20 }}>You can also ask the AI: "I own a flat worth 45M HUF with 18M mortgage"</div>
+          {[
+            ["Property name *", "name", "text", "e.g. Family home, Rental flat"],
+            ["Address", "address", "text", "e.g. Budapest XI."],
+            ["Current value *", "currentValue", "number", "e.g. 45000000"],
+            ["Outstanding mortgage", "mortgage", "number", "0 if none"],
+            ["Purchase year", "purchaseYear", "number", "e.g. 2018"],
+          ].map(([label, key, type, placeholder]) => (
+            <div key={key} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+              <input type={type} value={reForm[key]} onChange={e => setREForm(f => ({ ...f, [key]: e.target.value }))} placeholder={placeholder}
+                style={{ width: "100%", background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+            </div>
+          ))}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Currency</div>
+            <select value={reForm.currency} onChange={e => setREForm(f => ({ ...f, currency: e.target.value }))}
+              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", color: C.text, fontSize: 13, outline: "none" }}>
+              {["HUF","EUR","USD"].map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={saveRE} disabled={!reForm.name || !reForm.currentValue}>Save property</Btn>
+            <Btn variant="ghost" onClick={() => setShowREForm(false)}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+      {showCashForm && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>💰 Add Cash Account</div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 20 }}>You can also ask the AI: "I have 2M HUF in OTP and €5,000 in Revolut"</div>
+          {[
+            ["Account name *", "name", "text", "e.g. OTP Bank, Revolut"],
+            ["Balance *", "balance", "number", "Current balance"],
+          ].map(([label, key, type, placeholder]) => (
+            <div key={key} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+              <input type={type} value={cashForm[key]} onChange={e => setCashForm(f => ({ ...f, [key]: e.target.value }))} placeholder={placeholder}
+                style={{ width: "100%", background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Currency</div>
+              <select value={cashForm.currency} onChange={e => setCashForm(f => ({ ...f, currency: e.target.value }))}
+                style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", color: C.text, fontSize: 13, outline: "none", width: "100%" }}>
+                {["HUF","EUR","USD"].map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Type</div>
+              <select value={cashForm.type} onChange={e => setCashForm(f => ({ ...f, type: e.target.value }))}
+                style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", color: C.text, fontSize: 13, outline: "none", width: "100%" }}>
+                {["Checking","Savings","Emergency fund","Brokerage cash","Other"].map(t => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={saveCash} disabled={!cashForm.name || !cashForm.balance}>Save account</Btn>
+            <Btn variant="ghost" onClick={() => setShowCashForm(false)}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -2591,7 +2780,7 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
 function buildSystemPrompt(data, readonly, todayDate) {
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   return `You are PFA, a personal finance assistant for a Hungarian household. Today is ${todayDate}.
-Primary currency: HUF (EUR≈395 HUF, USD≈360 HUF).
+Primary currency: HUF (EUR≈358 HUF, USD≈310 HUF).
 Current household data: ${JSON.stringify(data)}
 
 ${readonly ? "DEMO MODE: Answer questions only. Do not suggest data mutations or output IMPORT_BATCH blocks." : `
