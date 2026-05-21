@@ -2103,6 +2103,10 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
   const [showCashForm, setShowCashForm] = useState(false);
   const [reForm, setREForm] = useState({ name: "", address: "", currentValue: "", mortgage: "", currency: "HUF", purchaseYear: new Date().getFullYear() });
   const [cashForm, setCashForm] = useState({ name: "", balance: "", currency: "HUF", type: "Savings" });
+  const [editingREId, setEditingREId] = useState(null);
+  const [editingCashId, setEditingCashId] = useState(null);
+  const [confirmDeleteREId, setConfirmDeleteREId] = useState(null);
+  const [confirmDeleteCashId, setConfirmDeleteCashId] = useState(null);
 
   const allPositions = data.portfolios.flatMap(p =>
     p.positions.map(pos => ({ ...pos, portfolioName: p.name }))
@@ -2196,18 +2200,57 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
 
   const wealthIsEmpty = allPositions.length === 0 && data.realEstate.length === 0 && data.cashAccounts.length === 0;
 
+  const EMPTY_RE_FORM = { name: "", address: "", currentValue: "", mortgage: "", currency: "HUF", purchaseYear: new Date().getFullYear() };
+  const EMPTY_CASH_FORM = { name: "", balance: "", currency: "HUF", type: "Savings" };
+
+  function startEditRE(r) {
+    setREForm({ name: r.name, address: r.address || "", currentValue: String(r.currentValue), mortgage: String(r.mortgage || 0), currency: r.currency || "HUF", purchaseYear: r.purchaseYear || new Date().getFullYear() });
+    setEditingREId(r.id);
+    setShowREForm(false);
+  }
+
   function saveRE() {
     if (!reForm.name || !reForm.currentValue) return;
-    setData(d => ({ ...d, realEstate: [...d.realEstate, { id: `re_${Date.now()}`, name: reForm.name, address: reForm.address, currentValue: Number(reForm.currentValue), mortgage: Number(reForm.mortgage) || 0, currency: reForm.currency, purchaseYear: Number(reForm.purchaseYear) }] }));
-    setREForm({ name: "", address: "", currentValue: "", mortgage: "", currency: "HUF", purchaseYear: new Date().getFullYear() });
-    setShowREForm(false);
+    const entry = { name: reForm.name, address: reForm.address, currentValue: Number(reForm.currentValue), mortgage: Number(reForm.mortgage) || 0, currency: reForm.currency, purchaseYear: Number(reForm.purchaseYear) };
+    if (editingREId) {
+      setData(d => ({ ...d, realEstate: d.realEstate.map(r => r.id === editingREId ? { ...r, ...entry } : r) }));
+      setEditingREId(null);
+    } else {
+      setData(d => ({ ...d, realEstate: [...d.realEstate, { id: `re_${Date.now()}`, ...entry }] }));
+      setShowREForm(false);
+    }
+    setREForm(EMPTY_RE_FORM);
+  }
+
+  function deleteRE(id) {
+    setData(d => ({ ...d, realEstate: d.realEstate.filter(r => r.id !== id) }));
+    setConfirmDeleteREId(null);
+    if (editingREId === id) { setEditingREId(null); setREForm(EMPTY_RE_FORM); }
+  }
+
+  function startEditCash(a) {
+    setCashForm({ name: a.name, balance: String(a.balance), currency: a.currency || "HUF", type: a.type || "Savings" });
+    setEditingCashId(a.id);
+    setShowCashForm(false);
   }
 
   function saveCash() {
     if (!cashForm.name || !cashForm.balance) return;
-    setData(d => ({ ...d, cashAccounts: [...d.cashAccounts, { id: `ca_${Date.now()}`, name: cashForm.name, balance: Number(cashForm.balance), currency: cashForm.currency, type: cashForm.type }] }));
-    setCashForm({ name: "", balance: "", currency: "HUF", type: "Savings" });
-    setShowCashForm(false);
+    const entry = { name: cashForm.name, balance: Number(cashForm.balance), currency: cashForm.currency, type: cashForm.type };
+    if (editingCashId) {
+      setData(d => ({ ...d, cashAccounts: d.cashAccounts.map(a => a.id === editingCashId ? { ...a, ...entry } : a) }));
+      setEditingCashId(null);
+    } else {
+      setData(d => ({ ...d, cashAccounts: [...d.cashAccounts, { id: `ca_${Date.now()}`, ...entry }] }));
+      setShowCashForm(false);
+    }
+    setCashForm(EMPTY_CASH_FORM);
+  }
+
+  function deleteCash(id) {
+    setData(d => ({ ...d, cashAccounts: d.cashAccounts.filter(a => a.id !== id) }));
+    setConfirmDeleteCashId(null);
+    if (editingCashId === id) { setEditingCashId(null); setCashForm(EMPTY_CASH_FORM); }
   }
 
   if (wealthIsEmpty && !showREForm && !showCashForm) return (
@@ -2245,7 +2288,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Btn onClick={saveRE} disabled={!reForm.name || !reForm.currentValue}>Save property</Btn>
-            <Btn variant="ghost" onClick={() => setShowREForm(false)}>Cancel</Btn>
+            <Btn variant="ghost" onClick={() => { setShowREForm(false); setREForm(EMPTY_RE_FORM); }}>Cancel</Btn>
           </div>
         </div>
       )}
@@ -2390,30 +2433,232 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
         )}
 
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+
+          {/* ── Real Estate card ── */}
           <Card>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>Real Estate</div>
-            {data.realEstate.map(r => (
-              <div key={r.id} style={{ padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                <div style={{ fontWeight: 500 }}>{r.name}</div>
-                <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{r.address} · {r.purchaseYear}</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                  <div><div style={{ fontSize: 10, color: C.muted }}>VALUE</div><div style={{ fontSize: 13, fontWeight: 600 }}>{fmtHUF(r.currentValue)}</div></div>
-                  <div><div style={{ fontSize: 10, color: C.muted }}>MORTGAGE</div><div style={{ fontSize: 13, fontWeight: 600, color: C.red }}>{fmtHUF(r.mortgage)}</div></div>
-                  <div><div style={{ fontSize: 10, color: C.muted }}>EQUITY</div><div style={{ fontSize: 13, fontWeight: 600, color: C.green }}>{fmtHUF(r.currentValue - r.mortgage)}</div></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontWeight: 600 }}>Real Estate</div>
+              {!readonly && <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>✦ AI chat works too</span>}
+            </div>
+
+            {data.realEstate.map(r => {
+              if (editingREId === r.id) return (
+                <div key={r.id} style={{ background: C.bg, border: `1px solid ${C.accent}55`, borderRadius: 10, padding: 14, margin: "6px 0" }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: C.accent, marginBottom: 10 }}>Edit property</div>
+                  {[["Name *","name","text","e.g. Family home"],["Address","address","text","e.g. Budapest XI."],["Current value *","currentValue","number",""],["Outstanding mortgage","mortgage","number","0 if none"],["Purchase year","purchaseYear","number",""]].map(([label,key,type,ph]) => (
+                    <div key={key} style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>{label}</div>
+                      <input type={type} value={reForm[key]} onChange={e => setREForm(f => ({ ...f, [key]: e.target.value }))} placeholder={ph}
+                        style={{ width: "100%", background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                    </div>
+                  ))}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Currency</div>
+                    <select value={reForm.currency} onChange={e => setREForm(f => ({ ...f, currency: e.target.value }))}
+                      style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none" }}>
+                      {["HUF","EUR","USD"].map(c => <option key={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Btn onClick={saveRE} disabled={!reForm.name || !reForm.currentValue}>Save changes</Btn>
+                    <Btn variant="ghost" onClick={() => { setEditingREId(null); setREForm(EMPTY_RE_FORM); }}>Cancel</Btn>
+                  </div>
+                </div>
+              );
+              return (
+                <div key={r.id} style={{ padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 2 }}>
+                    <div style={{ fontWeight: 500 }}>{r.name}</div>
+                    {!readonly && (
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button onClick={() => startEditRE(r)} title="Edit" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+                        <button onClick={() => setConfirmDeleteREId(r.id)} title="Delete" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14, padding: "2px 4px" }}>×</button>
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{r.address}{r.address && r.purchaseYear ? " · " : ""}{r.purchaseYear}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                    <div><div style={{ fontSize: 10, color: C.muted }}>VALUE</div><div style={{ fontSize: 13, fontWeight: 600 }}>{fmtHUF(toHUF(r.currentValue, r.currency || "HUF"))}</div></div>
+                    <div><div style={{ fontSize: 10, color: C.muted }}>MORTGAGE</div><div style={{ fontSize: 13, fontWeight: 600, color: C.red }}>{fmtHUF(toHUF(r.mortgage || 0, r.currency || "HUF"))}</div></div>
+                    <div><div style={{ fontSize: 10, color: C.muted }}>EQUITY</div><div style={{ fontSize: 13, fontWeight: 600, color: C.green }}>{fmtHUF(toHUF((r.currentValue || 0) - (r.mortgage || 0), r.currency || "HUF"))}</div></div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Add form */}
+            {showREForm && !readonly && (
+              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, marginTop: 10 }}>
+                <div style={{ fontWeight: 600, fontSize: 12, color: C.accent, marginBottom: 10 }}>Add property</div>
+                {[["Name *","name","text","e.g. Family home"],["Address","address","text","e.g. Budapest XI."],["Current value *","currentValue","number",""],["Outstanding mortgage","mortgage","number","0 if none"],["Purchase year","purchaseYear","number",""]].map(([label,key,type,ph]) => (
+                  <div key={key} style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>{label}</div>
+                    <input type={type} value={reForm[key]} onChange={e => setREForm(f => ({ ...f, [key]: e.target.value }))} placeholder={ph}
+                      style={{ width: "100%", background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                  </div>
+                ))}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Currency</div>
+                  <select value={reForm.currency} onChange={e => setREForm(f => ({ ...f, currency: e.target.value }))}
+                    style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none" }}>
+                    {["HUF","EUR","USD"].map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Btn onClick={saveRE} disabled={!reForm.name || !reForm.currentValue}>Add property</Btn>
+                  <Btn variant="ghost" onClick={() => { setShowREForm(false); setREForm(EMPTY_RE_FORM); }}>Cancel</Btn>
                 </div>
               </div>
-            ))}
+            )}
+
+            {!readonly && !showREForm && !editingREId && (
+              <button onClick={() => { setShowREForm(true); setREForm(EMPTY_RE_FORM); }}
+                style={{ marginTop: 12, background: "none", border: `1px dashed ${C.border}`, borderRadius: 8, padding: "7px 14px", color: C.muted, cursor: "pointer", fontSize: 12, width: "100%" }}>
+                + Add property manually
+              </button>
+            )}
           </Card>
+
+          {/* ── Cash Accounts card ── */}
           <Card>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>Cash Accounts</div>
-            {data.cashAccounts.map(a => (
-              <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                <div><div style={{ fontSize: 13, fontWeight: 500 }}>{a.name}</div><Tag color={C.muted}>{a.type}</Tag></div>
-                <div style={{ fontWeight: 600, color: C.green }}>{fmtHUF(toHUF(a.balance, a.currency))}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontWeight: 600 }}>Cash Accounts</div>
+              {!readonly && <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>✦ AI chat works too</span>}
+            </div>
+
+            {data.cashAccounts.map(a => {
+              if (editingCashId === a.id) return (
+                <div key={a.id} style={{ background: C.bg, border: `1px solid ${C.accent}55`, borderRadius: 10, padding: 14, margin: "6px 0" }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: C.accent, marginBottom: 10 }}>Edit account</div>
+                  {[["Name *","name","text","e.g. OTP Bank"],["Balance *","balance","number",""]].map(([label,key,type,ph]) => (
+                    <div key={key} style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>{label}</div>
+                      <input type={type} value={cashForm[key]} onChange={e => setCashForm(f => ({ ...f, [key]: e.target.value }))} placeholder={ph}
+                        style={{ width: "100%", background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Currency</div>
+                      <select value={cashForm.currency} onChange={e => setCashForm(f => ({ ...f, currency: e.target.value }))}
+                        style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", width: "100%" }}>
+                        {["HUF","EUR","USD"].map(c => <option key={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Type</div>
+                      <select value={cashForm.type} onChange={e => setCashForm(f => ({ ...f, type: e.target.value }))}
+                        style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", width: "100%" }}>
+                        {["Checking","Savings","Emergency fund","Brokerage cash","Other"].map(t => <option key={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Btn onClick={saveCash} disabled={!cashForm.name || !cashForm.balance}>Save changes</Btn>
+                    <Btn variant="ghost" onClick={() => { setEditingCashId(null); setCashForm(EMPTY_CASH_FORM); }}>Cancel</Btn>
+                  </div>
+                </div>
+              );
+              return (
+                <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{a.name}</div>
+                    <Tag color={C.muted}>{a.type}</Tag>
+                    {a.currency !== "HUF" && <span style={{ fontSize: 11, color: C.muted, marginLeft: 6 }}>{a.balance} {a.currency}</span>}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ fontWeight: 600, color: C.green }}>{fmtHUF(toHUF(a.balance, a.currency))}</div>
+                    {!readonly && (
+                      <div style={{ display: "flex", gap: 2 }}>
+                        <button onClick={() => startEditCash(a)} title="Edit" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+                        <button onClick={() => setConfirmDeleteCashId(a.id)} title="Delete" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14, padding: "2px 4px" }}>×</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Add form */}
+            {showCashForm && !readonly && (
+              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, marginTop: 10 }}>
+                <div style={{ fontWeight: 600, fontSize: 12, color: C.accent, marginBottom: 10 }}>Add account</div>
+                {[["Name *","name","text","e.g. OTP Bank, Revolut"],["Balance *","balance","number","Current balance"]].map(([label,key,type,ph]) => (
+                  <div key={key} style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>{label}</div>
+                    <input type={type} value={cashForm[key]} onChange={e => setCashForm(f => ({ ...f, [key]: e.target.value }))} placeholder={ph}
+                      style={{ width: "100%", background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Currency</div>
+                    <select value={cashForm.currency} onChange={e => setCashForm(f => ({ ...f, currency: e.target.value }))}
+                      style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", width: "100%" }}>
+                      {["HUF","EUR","USD"].map(c => <option key={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Type</div>
+                    <select value={cashForm.type} onChange={e => setCashForm(f => ({ ...f, type: e.target.value }))}
+                      style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", width: "100%" }}>
+                      {["Checking","Savings","Emergency fund","Brokerage cash","Other"].map(t => <option key={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Btn onClick={saveCash} disabled={!cashForm.name || !cashForm.balance}>Add account</Btn>
+                  <Btn variant="ghost" onClick={() => { setShowCashForm(false); setCashForm(EMPTY_CASH_FORM); }}>Cancel</Btn>
+                </div>
               </div>
-            ))}
+            )}
+
+            {!readonly && !showCashForm && !editingCashId && (
+              <button onClick={() => { setShowCashForm(true); setCashForm(EMPTY_CASH_FORM); }}
+                style={{ marginTop: 12, background: "none", border: `1px dashed ${C.border}`, borderRadius: 8, padding: "7px 14px", color: C.muted, cursor: "pointer", fontSize: 12, width: "100%" }}>
+                + Add account manually
+              </button>
+            )}
           </Card>
         </div>
+
+        {/* Delete confirmation modals */}
+        {confirmDeleteREId && (() => {
+          const r = data.realEstate.find(x => x.id === confirmDeleteREId);
+          if (!r) return null;
+          return (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}
+              onClick={() => setConfirmDeleteREId(null)}>
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, width: 360, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }}
+                onClick={e => e.stopPropagation()}>
+                <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Delete property?</div>
+                <div style={{ fontSize: 13, color: C.textSoft, marginBottom: 20 }}>This will permanently remove <strong>{r.name}</strong>. This cannot be undone.</div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <Btn variant="danger" onClick={() => deleteRE(confirmDeleteREId)} style={{ flex: 1 }}>Yes, delete</Btn>
+                  <Btn variant="ghost" onClick={() => setConfirmDeleteREId(null)} style={{ flex: 1 }}>Cancel</Btn>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+        {confirmDeleteCashId && (() => {
+          const a = data.cashAccounts.find(x => x.id === confirmDeleteCashId);
+          if (!a) return null;
+          return (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}
+              onClick={() => setConfirmDeleteCashId(null)}>
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, width: 360, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }}
+                onClick={e => e.stopPropagation()}>
+                <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Delete account?</div>
+                <div style={{ fontSize: 13, color: C.textSoft, marginBottom: 20 }}>This will permanently remove <strong>{a.name}</strong>. This cannot be undone.</div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <Btn variant="danger" onClick={() => deleteCash(confirmDeleteCashId)} style={{ flex: 1 }}>Yes, delete</Btn>
+                  <Btn variant="ghost" onClick={() => setConfirmDeleteCashId(null)} style={{ flex: 1 }}>Cancel</Btn>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </>)}
 
       {/* ══════ BY PORTFOLIO VIEW ══════ */}
