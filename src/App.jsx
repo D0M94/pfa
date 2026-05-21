@@ -2168,7 +2168,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
         {pies.assetClass.length > 0 && (
           <Card>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>By Asset Class</div>
+            <div style={{ fontWeight: 600, marginBottom: 12 }}>Asset class breakdown</div>
             <ResponsiveContainer width="100%" height={180}>
               <PieChart>
                 <Pie data={pies.assetClass} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={70} innerRadius={36}>
@@ -2182,7 +2182,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
         )}
         {pies.region.length > 0 && (
           <Card>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>By Geography</div>
+            <div style={{ fontWeight: 600, marginBottom: 12 }}>Geographic exposure</div>
             <ResponsiveContainer width="100%" height={180}>
               <PieChart>
                 <Pie data={pies.region} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={70} innerRadius={36}>
