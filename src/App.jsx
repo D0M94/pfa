@@ -468,16 +468,17 @@ function EditableTxnRow({ t, readonly, setData }) {
 }
 
 // ─── Getting Started Empty State ──────────────────────────────────────────────
-function GettingStarted({ tab, readonly, onOpenChat }) {
+function GettingStarted({ tab, readonly, onOpenChat, onOpenUpload }) {
+  const [hovered, setHovered] = useState(null);
   const configs = {
     costs: {
       icon: "📋",
       title: "Track your recurring costs",
       subtitle: "Add your bills, subscriptions, and fixed expenses to see where your money goes each month.",
       steps: [
-        { icon: "➕", text: "Add a recurring bill (rent, subscriptions, utilities)" },
-        { icon: "💬", text: "Or tell the AI: \"Add 120k HUF monthly rent\"" },
-        { icon: "📂", text: "Import a cost list from Excel or CSV" },
+        { icon: "➕", text: "Add a recurring bill (rent, subscriptions, utilities)", action: { type: "chat", message: "I want to add a recurring bill" } },
+        { icon: "💬", text: "Tell the AI: \"Add 120k HUF monthly rent\"", action: { type: "chat", message: "Add 120k HUF monthly rent" } },
+        { icon: "📂", text: "Import a cost list from Excel or CSV", action: { type: "upload" } },
       ],
     },
     cashflow: {
@@ -485,9 +486,9 @@ function GettingStarted({ tab, readonly, onOpenChat }) {
       title: "See your monthly cash flow",
       subtitle: "Import your bank statement to automatically track income and expenses.",
       steps: [
-        { icon: "🏦", text: "Upload your bank CSV (Revolut, OTP, Erste supported)" },
-        { icon: "💬", text: "Or type: \"I spent 8500 HUF on lunch today\"" },
-        { icon: "📊", text: "Get monthly income/expense charts automatically" },
+        { icon: "🏦", text: "Upload your bank CSV (Revolut, OTP, Erste supported)", action: { type: "upload" } },
+        { icon: "💬", text: "Tell the AI: \"I spent 8500 HUF on lunch today\"", action: { type: "chat", message: "I spent 8500 HUF on lunch today" } },
+        { icon: "💬", text: "Or: \"I got paid 850,000 HUF salary this month\"", action: { type: "chat", message: "I got paid 850,000 HUF salary this month" } },
       ],
     },
     wealth: {
@@ -495,15 +496,21 @@ function GettingStarted({ tab, readonly, onOpenChat }) {
       title: "Track your net worth",
       subtitle: "Add your investments, real estate, and cash accounts for a complete wealth picture.",
       steps: [
-        { icon: "📦", text: "Create a portfolio and add your positions (IBKR, Erste…)" },
-        { icon: "🏠", text: "Add real estate with current value and mortgage" },
-        { icon: "💰", text: "Add cash accounts and savings" },
+        { icon: "📦", text: "Create a portfolio and add positions (IBKR, Erste…)", action: { type: "chat", message: "I want to create a new investment portfolio" } },
+        { icon: "🏠", text: "Add real estate with current value and mortgage", action: { type: "chat", message: "Add real estate with current value and mortgage" } },
+        { icon: "💰", text: "Add a cash or savings account", action: { type: "chat", message: "Add a cash account" } },
       ],
     },
   };
 
   const cfg = configs[tab];
   if (!cfg) return null;
+
+  function handleStep(action) {
+    if (readonly || !action) return;
+    if (action.type === "upload") onOpenUpload?.();
+    else if (action.type === "chat") onOpenChat?.(action.message);
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 24px", textAlign: "center", maxWidth: 520, margin: "0 auto" }}>
@@ -512,20 +519,38 @@ function GettingStarted({ tab, readonly, onOpenChat }) {
       <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, marginBottom: 32 }}>{cfg.subtitle}</div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", marginBottom: 32 }}>
-        {cfg.steps.map((s, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", textAlign: "left" }}>
-            <span style={{ fontSize: 18, flexShrink: 0 }}>{s.icon}</span>
-            <span style={{ fontSize: 13, color: C.textSoft }}>{s.text}</span>
-          </div>
-        ))}
+        {cfg.steps.map((s, i) => {
+          const isUpload = s.action?.type === "upload";
+          const isActive = !readonly;
+          return (
+            <button
+              key={i}
+              onClick={() => handleStep(s.action)}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
+              disabled={readonly}
+              style={{
+                display: "flex", alignItems: "center", gap: 12,
+                background: hovered === i && isActive ? C.surfaceHigh : C.surface,
+                border: `1px solid ${hovered === i && isActive ? C.accent : C.border}`,
+                borderRadius: 10, padding: "12px 16px", textAlign: "left",
+                cursor: isActive ? "pointer" : "default",
+                width: "100%", transition: "border-color 0.15s, background 0.15s",
+                outline: "none",
+              }}
+            >
+              <span style={{ fontSize: 18, flexShrink: 0 }}>{s.icon}</span>
+              <span style={{ fontSize: 13, color: hovered === i && isActive ? C.text : C.textSoft, flex: 1, transition: "color 0.15s" }}>{s.text}</span>
+              {isActive && (
+                <span style={{ fontSize: 11, color: hovered === i ? C.accent : C.muted, flexShrink: 0, fontWeight: 600, transition: "color 0.15s" }}>
+                  {isUpload ? "Upload ↑" : "Try it →"}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      {!readonly && (
-        <button onClick={onOpenChat}
-          style={{ background: C.accent, border: "none", borderRadius: 10, padding: "12px 28px", fontSize: 14, fontWeight: 700, color: "#000", cursor: "pointer" }}>
-          ✦ Ask the AI to get started
-        </button>
-      )}
       {readonly && (
         <div style={{ fontSize: 12, color: C.muted, background: C.surfaceHigh, borderRadius: 8, padding: "10px 16px" }}>
           📖 Demo mode — sign in to add your own data
@@ -536,7 +561,7 @@ function GettingStarted({ tab, readonly, onOpenChat }) {
 }
 
 // ─── Costs Tab ────────────────────────────────────────────────────────────────
-function Costs({ data, setData, readonly, onImport, onOpenChat }) {
+function Costs({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) {
   const isMobile = useIsMobile();
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -624,7 +649,7 @@ function Costs({ data, setData, readonly, onImport, onOpenChat }) {
   }
 
   const isEmpty = data.costs.length === 0 && data.transactions.length === 0;
-  if (isEmpty) return <GettingStarted tab="costs" readonly={readonly} onOpenChat={onOpenChat} />;
+  if (isEmpty) return <GettingStarted tab="costs" readonly={readonly} onOpenChat={onOpenChat} onOpenUpload={onOpenUpload} />;
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -1096,7 +1121,7 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
 }
 
 // ─── Cash Flow Tab ────────────────────────────────────────────────────────────
-function CashFlow({ data, setData, readonly, onImport, onOpenChat }) {
+function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) {
   const isMobile = useIsMobile();
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -1170,7 +1195,7 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat }) {
     setAdding(false);
   }
 
-  if (data.transactions.length === 0) return <GettingStarted tab="cashflow" readonly={readonly} onOpenChat={onOpenChat} />;
+  if (data.transactions.length === 0) return <GettingStarted tab="cashflow" readonly={readonly} onOpenChat={onOpenChat} onOpenUpload={onOpenUpload} />;
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -1976,7 +2001,7 @@ function maybeSnapshotNW(data, setData) {
   }));
 }
 
-function Wealth({ data, setData, readonly, onImport, onOpenChat }) {
+function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) {
   const isMobile = useIsMobile();
   const [portfolioView, setPortfolioView] = useState("total"); // "total" | "single"
   const [selectedPortfolioId, setSelectedPortfolioId] = useState(() => data.portfolios[0]?.id || null);
@@ -2072,7 +2097,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat }) {
   }
 
   const wealthIsEmpty = allPositions.length === 0 && data.realEstate.length === 0 && data.cashAccounts.length === 0;
-  if (wealthIsEmpty) return <GettingStarted tab="wealth" readonly={readonly} onOpenChat={onOpenChat} />;
+  if (wealthIsEmpty) return <GettingStarted tab="wealth" readonly={readonly} onOpenChat={onOpenChat} onOpenUpload={onOpenUpload} />;
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -3036,7 +3061,7 @@ function QuickAdd({ setData, onClose, isMobile }) {
 }
 
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
-function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport, isMobile }) {
+function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport, isMobile, initialMessage, clearInitialMessage, triggerFileOpen, clearTriggerFileOpen }) {
   const [messages, setMessages] = useState([]);
   const [history, setHistory] = useState([]);
   const [input, setInput] = useState("");
@@ -3049,6 +3074,27 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   const bottomRef = useRef(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading, pendingBatch]);
+
+  // Pre-fill input when opened with a suggested message from a quick-start tile
+  useEffect(() => {
+    if (!open || !initialMessage) return;
+    setInput(initialMessage);
+    setMinimized(false);
+    clearInitialMessage?.();
+    // Auto-focus the input after a short delay to ensure the chat is rendered
+    setTimeout(() => {
+      const inputEl = document.querySelector(".pfa-chat-input");
+      inputEl?.focus();
+    }, 80);
+  }, [open, initialMessage]);
+
+  // Trigger file input when opened via an upload quick-start tile
+  useEffect(() => {
+    if (!open || !triggerFileOpen) return;
+    setMinimized(false);
+    clearTriggerFileOpen?.();
+    setTimeout(() => fileInputRef.current?.click(), 80);
+  }, [open, triggerFileOpen]);
 
   // When a file arrives from a tab upload card, pre-load it
   useEffect(() => {
@@ -3460,6 +3506,7 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
           style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 11px", cursor: readonly ? "not-allowed" : "pointer", color: attachedFile ? C.accent : C.muted, fontSize: 15, flexShrink: 0, opacity: readonly ? 0.4 : 1, lineHeight: 1 }}
         >📎</button>
         <input
+          className="pfa-chat-input"
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
@@ -3517,11 +3564,25 @@ function AppInner() {
   const [sweepOpen, setSweepOpen] = useState(false);
   const [sweepDismissed, setSweepDismissed] = useState(false);
   const [pendingImport, setPendingImport] = useState(null); // { name, text, fileType }
+  const [pendingChatMessage, setPendingChatMessage] = useState(null); // pre-fill message from quick-start tile
+  const [pendingFileOpen, setPendingFileOpen] = useState(false); // trigger file input from quick-start tile
   const [darkMode, setDarkMode] = useState(true);
   Object.assign(C, darkMode ? DARK_C : LIGHT_C);
 
   function handleImport(file, fileType) {
     setPendingImport({ ...file, fileType });
+    setChatOpen(true);
+  }
+
+  // Called by quick-start tiles with an optional pre-filled message
+  function handleOpenChat(message) {
+    if (message) setPendingChatMessage(message);
+    setChatOpen(true);
+  }
+
+  // Called by quick-start upload tiles
+  function handleOpenUpload() {
+    setPendingFileOpen(true);
     setChatOpen(true);
   }
   const [data, setDataRaw] = useState(EMPTY_DATA);
@@ -3669,9 +3730,9 @@ function AppInner() {
 
       {/* ── Main content ── */}
       <main style={{ padding: isMobile ? "16px 12px" : "24px clamp(16px, 3vw, 48px)", maxWidth: "min(1600px, 96vw)", margin: "0 auto", width: "100%", boxSizing: "border-box", paddingBottom: isMobile ? 80 : undefined }}>
-        {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={() => setChatOpen(true)} />}
-        {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={() => setChatOpen(true)} />}
-        {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={() => setChatOpen(true)} />}
+        {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
+        {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
+        {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
       </main>
 
       {/* ── Bottom tab bar (mobile only) ── */}
@@ -3707,7 +3768,7 @@ function AppInner() {
         <QuickAdd setData={setData} onClose={() => setQuickAddOpen(false)} isMobile={isMobile} />
       )}
 
-      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} />
+      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} initialMessage={pendingChatMessage} clearInitialMessage={() => setPendingChatMessage(null)} triggerFileOpen={pendingFileOpen} clearTriggerFileOpen={() => setPendingFileOpen(false)} />
     </div>
   );
 }
