@@ -176,7 +176,8 @@ async function fileToText(file) {
 const EMPTY_DATA = {
   costs: [], transactions: [], portfolios: [], realEstate: [],
   cashAccounts: [], budgetTargets: [], savingsGoals: [], netWorthHistory: [],
-  merchantRules: [] // { keyword, category } — learned from user corrections
+  merchantRules: [], // { keyword, category } — learned from user corrections
+  customCategories: [] // user-defined categories
 };
 
 const DEMO_DATA = {
@@ -393,7 +394,7 @@ function MonthPicker({ viewMonth, setViewMonth, thisMonth }) {
 }
 
 // ─── Editable Transaction Row (used in cost modal + all-txn modal) ────────────
-function EditableTxnRow({ t, readonly, setData }) {
+function EditableTxnRow({ t, readonly, setData, data }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({ date: t.date, desc: t.desc, amount: String(Math.abs(t.amount)), currency: t.currency, category: t.category, type: t.type });
 
@@ -424,7 +425,7 @@ function EditableTxnRow({ t, readonly, setData }) {
           <Sel value={draft.currency} onChange={v => setDraft(d => ({ ...d, currency: v }))} options={["HUF","EUR","USD"]} />
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 6 }}>
-          <Sel value={draft.category} onChange={v => setDraft(d => ({ ...d, category: v }))} options={CATEGORIES} />
+          <Sel value={draft.category} onChange={v => setDraft(d => ({ ...d, category: v }))} options={allCategories(data)} />
           <Sel value={draft.type} onChange={v => setDraft(d => ({ ...d, type: v }))} options={["expense","income"]} />
           <Btn onClick={save} style={{ fontSize: 12 }}>Save</Btn>
           <Btn variant="ghost" onClick={() => setEditing(false)} style={{ fontSize: 12 }}>Cancel</Btn>
@@ -449,7 +450,7 @@ function EditableTxnRow({ t, readonly, setData }) {
           }}
           disabled={readonly}
           style={{ background: (t.type === "income" ? C.green : C.red) + "22", color: t.type === "income" ? C.green : C.red, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
-          {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+          {allCategories(data).map(cat => <option key={cat} value={cat}>{cat}</option>)}
         </select>
         <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</span>
       </div>
@@ -781,7 +782,7 @@ function Costs({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) 
             {adding && !readonly && (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 16, padding: 16, background: C.surfaceHigh, borderRadius: 10 }}>
                 <Inp value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Name" />
-                <Sel value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={CATEGORIES} />
+                <Sel value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={allCategories(data)} />
                 <Inp value={form.amount} onChange={v => setForm(f => ({ ...f, amount: v }))} placeholder="Amount" type="number" />
                 <Sel value={form.currency} onChange={v => setForm(f => ({ ...f, currency: v }))} options={["HUF","EUR","USD"]} />
                 <Sel value={form.type} onChange={v => setForm(f => ({ ...f, type: v }))} options={["recurring","onetime"]} />
@@ -805,7 +806,7 @@ function Costs({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) 
                         onChange={e => setData(d => ({ ...d, costs: d.costs.map(x => x.id === c.id ? { ...x, category: e.target.value } : x) }))}
                         disabled={readonly}
                         style={{ background: C.blue + "22", color: C.blue, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none" }}>
-                        {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                        {allCategories(data).map(cat => <option key={cat} value={cat}>{cat}</option>)}
                       </select>
                       <Tag color={C.muted}>{c.type}</Tag>
                       <span style={{ fontSize: 13 }}>{c.name}</span>
@@ -825,7 +826,7 @@ function Costs({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) 
                 <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, padding: "14px 0 6px" }}>
                   Outflows — {new Date(viewMonth + "-01").toLocaleString("en-GB", { month: "long", year: "numeric" })}
                 </div>
-                {monthTxns.map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} />)}
+                {monthTxns.map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} data={data} />)}
               </>
             )}
 
@@ -868,6 +869,9 @@ function Costs({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) 
         </div>
         <BudgetSection data={data} setData={setData} readonly={readonly} viewMonth={viewMonth} isAvg={isAvg} allMonths={allMonths} />
       </div>
+
+      {/* ── Manage Categories ── */}
+      {!readonly && <ManageCategories data={data} setData={setData} />}
     </div>
   );
 }
@@ -1347,7 +1351,7 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
             <Inp value={form.desc} onChange={v => setForm(f => ({ ...f, desc: v }))} placeholder="Description" />
             <Inp value={form.amount} onChange={v => setForm(f => ({ ...f, amount: v }))} placeholder="Amount" type="number" />
             <Sel value={form.currency} onChange={v => setForm(f => ({ ...f, currency: v }))} options={["HUF", "EUR", "USD"]} />
-            <Sel value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={CATEGORIES} />
+            <Sel value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={allCategories(data)} />
             <Sel value={form.type} onChange={v => setForm(f => ({ ...f, type: v }))} options={["expense", "income"]} />
             <Inp value={form.account} onChange={v => setForm(f => ({ ...f, account: v }))} placeholder="Account" />
             <Btn onClick={addTransaction} style={{ gridColumn: "span 4" }}>Save</Btn>
@@ -1359,7 +1363,7 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
             <span style={{ fontSize: 12 }}>Upload a bank statement or add manually.</span>
           </div>
         )}
-        {top10.map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} />)}
+        {top10.map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} data={data} />)}
       </Card>
 
       {/* All transactions modal */}
@@ -1375,7 +1379,7 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
               </div>
               <button onClick={() => setShowAllTxns(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>×</button>
             </div>
-            {[...monthTxns].sort((a, b) => b.date.localeCompare(a.date)).map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} />)}
+            {[...monthTxns].sort((a, b) => b.date.localeCompare(a.date)).map(t => <EditableTxnRow key={t.id} t={t} readonly={readonly} setData={setData} data={data} />)}
           </div>
         </div>
       )}
@@ -2070,6 +2074,7 @@ function normalizeData(raw) {
     savingsGoals: raw.savingsGoals || [],
     netWorthHistory: raw.netWorthHistory || [],
     merchantRules: raw.merchantRules || [],
+    customCategories: raw.customCategories || [],
   };
 }
 
@@ -2728,6 +2733,9 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
 
 // ─── Budget Intelligence ──────────────────────────────────────────────────────
 const EXPENSE_CATEGORIES = CATEGORIES.filter(c => c !== "Income" && c !== "Savings");
+// Merge built-in + user custom categories
+function allCategories(data) { return [...CATEGORIES, ...(data?.customCategories || [])]; }
+function allExpenseCategories(data) { return [...EXPENSE_CATEGORIES, ...(data?.customCategories || [])]; }
 const VARIABLE_RECURRING_CATEGORIES = ["Utilities"]; // always expected monthly, amount varies
 
 // Returns "YYYY-MM" for a date offset by `monthsAgo` calendar months from a given "YYYY-MM"
@@ -2870,6 +2878,79 @@ function BudgetBar({ category, spendInfo, limit, onEdit, onRemove, readonly }) {
 }
 
 // ─── Budget Section (embedded in Costs tab) ───────────────────────────────────
+// ─── Manage Categories ────────────────────────────────────────────────────────
+function ManageCategories({ data, setData }) {
+  const [open, setOpen] = React.useState(false);
+  const [input, setInput] = React.useState("");
+  const custom = data.customCategories || [];
+
+  function add() {
+    const name = input.trim();
+    if (!name || allCategories(data).map(c => c.toLowerCase()).includes(name.toLowerCase())) return;
+    setData(d => ({ ...d, customCategories: [...(d.customCategories || []), name] }));
+    setInput("");
+  }
+
+  function remove(cat) {
+    setData(d => ({ ...d, customCategories: (d.customCategories || []).filter(c => c !== cat) }));
+  }
+
+  return (
+    <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 8, marginTop: 8 }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }}>
+        <div>
+          <span style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Custom Categories</span>
+          {custom.length > 0 && <span style={{ marginLeft: 8, fontSize: 12, color: C.muted }}>{custom.length} added</span>}
+        </div>
+        <span style={{ color: C.muted, fontSize: 14 }}>{open ? "▲" : "▼"}</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+            Add new categories for costs and transactions. Built-in categories cannot be removed.
+          </div>
+          {/* Add input */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") add(); }}
+              placeholder="New category name"
+              style={{ flex: 1, background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none" }} />
+            <Btn onClick={add} style={{ fontSize: 12 }}>Add</Btn>
+          </div>
+          {/* Built-in */}
+          <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Built-in</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+            {CATEGORIES.map(cat => (
+              <span key={cat} style={{ background: C.surfaceHigh, color: C.textSoft, borderRadius: 6, padding: "3px 10px", fontSize: 12 }}>{cat}</span>
+            ))}
+          </div>
+          {/* Custom */}
+          {custom.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Custom</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {custom.map(cat => (
+                  <span key={cat} style={{ display: "flex", alignItems: "center", gap: 4, background: C.accent + "22", color: C.accent, borderRadius: 6, padding: "3px 8px 3px 10px", fontSize: 12 }}>
+                    {cat}
+                    <button onClick={() => remove(cat)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+          {custom.length === 0 && (
+            <div style={{ color: C.muted, fontSize: 12 }}>No custom categories yet. Add one above.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths }) {
   // Derive monthLabel from viewMonth prop
   const [_y, _m] = (viewMonth || "2024-01").split("-").map(Number);
@@ -2883,7 +2964,8 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
 
   // Compute spend info — single month or average across all months
   const spendInfoByCategory = {};
-  EXPENSE_CATEGORIES.forEach(cat => {
+  const expCats = allExpenseCategories(data);
+  expCats.forEach(cat => {
     if (isAvg && allMonths.length > 0) {
       const avgActual = allMonths.map(ym => sumExpensesInMonth(data.transactions, cat, ym))
         .reduce((a, b) => a + b, 0) / allMonths.length;
@@ -2894,8 +2976,8 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
   });
 
   // Which categories to show: has a target OR has spend/estimate
-  const trackedCats = EXPENSE_CATEGORIES.filter(c => targetMap[c] !== undefined);
-  const untrackedWithSpend = EXPENSE_CATEGORIES.filter(c =>
+  const trackedCats = expCats.filter(c => targetMap[c] !== undefined);
+  const untrackedWithSpend = expCats.filter(c =>
     targetMap[c] === undefined && spendInfoByCategory[c].actual > 0
   );
 
@@ -2917,7 +2999,7 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
 
   const [addingFor, setAddingFor] = useState(null);
   const [newLimit, setNewLimit] = useState("");
-  const [newCat, setNewCat] = useState(EXPENSE_CATEGORIES[0]);
+  const [newCat, setNewCat] = useState(expCats[0]);
 
   function confirmAdd(category, limitStr) {
     const v = parseFloat(limitStr);
@@ -2957,7 +3039,7 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
           <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "12px 0 4px", borderBottom: `1px solid ${C.border}` }}>
             <select value={newCat} onChange={e => setNewCat(e.target.value)}
               style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", flex: 1 }}>
-              {EXPENSE_CATEGORIES.filter(c => !targetMap[c]).map(c => <option key={c} value={c}>{c}</option>)}
+              {expCats.filter(c => !targetMap[c]).map(c => <option key={c} value={c}>{c}</option>)}
             </select>
             <input value={newLimit} onChange={e => setNewLimit(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") confirmAdd(newCat, newLimit); if (e.key === "Escape") setAddingFor(null); }}
@@ -3828,7 +3910,7 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
                         onChange={e => setPendingBatch(b => ({ ...b, items: b.items.map((it, i) => i === idx ? { ...it, category: e.target.value } : it) }))}
                         onClick={e => e.stopPropagation()}
                         style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 4px", color: C.text, fontSize: 11, outline: "none", cursor: "pointer" }}>
-                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        {allCategories(data).map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                       <span style={{ fontWeight: 600, flexShrink: 0, color: item.type === "income" ? C.green : C.red }}>
                         {item.type === "income" ? "+" : "−"}{fmtHUF(toHUF(Math.abs(item.amount), item.currency))}
@@ -4163,7 +4245,7 @@ function AppInner() {
       )}
 
       {/* ── Main content ── */}
-      <main style={{ padding: isMobile ? "16px 12px" : "24px clamp(16px, 3vw, 48px)", maxWidth: "min(1600px, 96vw)", margin: "0 auto", width: "100%", boxSizing: "border-box", paddingBottom: isMobile ? 80 : undefined }}>
+      <main style={{ padding: isMobile ? "16px 12px" : "24px clamp(16px, 2vw, 32px)", maxWidth: "min(2400px, 98vw)", margin: "0 auto", width: "100%", boxSizing: "border-box", paddingBottom: isMobile ? 80 : undefined }}>
         {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
         {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
         {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
