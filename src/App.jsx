@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Component } from "react";
+import React, { useState, useEffect, useRef, Component } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   BarChart, Bar, PieChart, Pie, Cell,
