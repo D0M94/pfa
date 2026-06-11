@@ -288,6 +288,7 @@ function Auth({ onLogin }) {
   ];
 
   return (
+    <>
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif", display: "flex", flexDirection: "column" }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono&display=swap" rel="stylesheet" />
 
@@ -418,6 +419,7 @@ function Auth({ onLogin }) {
       </div>
     </div>
     {showPrivacyModal && <PrivacyPolicyModal onClose={() => setShowPrivacyModal(false)} />}
+    </>
   );
 }
 
