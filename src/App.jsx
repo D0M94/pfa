@@ -217,6 +217,14 @@ const DEMO_DATA = {
   netWorthHistory: []
 };
 
+// ─── GDPR ─────────────────────────────────────────────────────────────────────
+// TODO before launch: replace every [PLACEHOLDER] below with real values
+const GDPR_CONSENT_KEY = "pfa_gdpr_consent_v1"; // localStorage key (per userId)
+const PRIVACY_EMAIL    = "[knowyourinvestingframework@gmail.com]";       // TODO: e.g. privacy@yourdomain.com
+const OPERATOR_NAME    = "[Dominik Zvara]";       // TODO: your legal name / business name
+const APP_DOMAIN       = "[https://pfa-iota.vercel.app]";          // TODO: e.g. pfa.yourdomain.com
+const SUPABASE_REGION  = "[eu-west-1]";     // TODO: Dashboard → Project Settings → Infrastructure
+
 // ─── UI Primitives ────────────────────────────────────────────────────────────
 function Card({ children, style }) {
   return <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, ...style }}>{children}</div>;
@@ -253,9 +261,16 @@ function Auth({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
   const isMobile = useIsMobile();
+  // GDPR: all three must be checked before sign-in is allowed
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const [ageConfirmed, setAgeConfirmed]       = useState(false);
+  const [partnerConfirmed, setPartnerConfirmed] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const canSendLink = email && consentAccepted && ageConfirmed && partnerConfirmed;
 
   async function sendLink() {
-    if (!email || !email.includes("@")) { setAuthError("Please enter a valid email address."); return; }
+    if (!canSendLink) { setAuthError("Please check all boxes below before continuing."); return; }
+    if (!email.includes("@")) { setAuthError("Please enter a valid email address."); return; }
     setLoading(true); setAuthError(null);
     const { error } = await supabase.auth.signInWithOtp({ email });
     if (error) { setAuthError("Couldn't send the link — you may not be on the access list yet."); }
@@ -269,7 +284,7 @@ function Auth({ onLogin }) {
     { icon: "📈", label: "Investment tracker", desc: "Portfolio positions, P&L, asset class breakdown" },
     { icon: "🎯", label: "Budget targets", desc: "Set limits, auto-detect recurring bills, get alerts" },
     { icon: "💬", label: "AI assistant", desc: "Ask questions, log transactions by typing naturally" },
-    { icon: "🔒", label: "Private & secure", desc: "Your data is yours — no ads, no sharing" },
+    { icon: "🔒", label: "Private & secure", desc: "No ads, no selling your data. AI chat sends a summary to Anthropic's API — see Privacy Policy." },
   ];
 
   return (
@@ -337,13 +352,43 @@ function Auth({ onLogin }) {
                     onKeyDown={e => e.key === "Enter" && sendLink()} />
                 </div>
 
+                {/* ── GDPR consent checkboxes ── */}
+                <div style={{ marginBottom: 14, display: "flex", flexDirection: "column", gap: 9 }}>
+                  <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+                    <input type="checkbox" checked={consentAccepted} onChange={e => setConsentAccepted(e.target.checked)}
+                      style={{ marginTop: 2, width: 15, height: 15, flexShrink: 0, cursor: "pointer", accentColor: C.accent }} />
+                    <span style={{ fontSize: 12, color: C.textSoft, lineHeight: 1.55 }}>
+                      I accept the{" "}
+                      <button onClick={() => setShowPrivacyModal(true)}
+                        style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 12, padding: 0, textDecoration: "underline" }}>
+                        Privacy Policy
+                      </button>.
+                      {" "}My data is stored on Supabase. AI chat sends a summary to Anthropic's API.
+                    </span>
+                  </label>
+                  <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+                    <input type="checkbox" checked={ageConfirmed} onChange={e => setAgeConfirmed(e.target.checked)}
+                      style={{ marginTop: 2, width: 15, height: 15, flexShrink: 0, cursor: "pointer", accentColor: C.accent }} />
+                    <span style={{ fontSize: 12, color: C.textSoft, lineHeight: 1.55 }}>
+                      I confirm I am 16 years of age or older (GDPR Art. 8).
+                    </span>
+                  </label>
+                  <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+                    <input type="checkbox" checked={partnerConfirmed} onChange={e => setPartnerConfirmed(e.target.checked)}
+                      style={{ marginTop: 2, width: 15, height: 15, flexShrink: 0, cursor: "pointer", accentColor: C.accent }} />
+                    <span style={{ fontSize: 12, color: C.textSoft, lineHeight: 1.55 }}>
+                      If I add data about other household members, they are aware and have agreed.
+                    </span>
+                  </label>
+                </div>
+
                 {authError && (
                   <div style={{ background: C.red + "18", border: `1px solid ${C.red}44`, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: C.red, marginBottom: 12, lineHeight: 1.5 }}>
                     ⚠ {authError}
                   </div>
                 )}
 
-                <Btn onClick={sendLink} disabled={loading || !email} style={{ width: "100%", marginBottom: 16, padding: "11px 0", fontSize: 14 }}>
+                <Btn onClick={sendLink} disabled={loading || !canSendLink} style={{ width: "100%", marginBottom: 16, padding: "11px 0", fontSize: 14 }}>
                   {loading ? "Sending…" : "Send login link →"}
                 </Btn>
 
@@ -364,7 +409,179 @@ function Auth({ onLogin }) {
 
       {/* Footer */}
       <div style={{ borderTop: `1px solid ${C.border}`, padding: "16px 24px", textAlign: "center", fontSize: 11, color: C.muted }}>
-        PFA · Personal Finance Assistant · Built for families · Data stored securely
+        PFA · Personal Finance Assistant ·{" "}
+        <button onClick={() => setShowPrivacyModal(true)}
+          style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 11, padding: 0, textDecoration: "underline" }}>
+          Privacy Policy
+        </button>
+        {" "}· Supabase ({SUPABASE_REGION}) · AI by Anthropic
+      </div>
+    </div>
+    {showPrivacyModal && <PrivacyPolicyModal onClose={() => setShowPrivacyModal(false)} />}
+  );
+}
+
+// ─── Privacy Policy Modal ─────────────────────────────────────────────────────
+function PrivacyPolicyModal({ onClose }) {
+  const sections = [
+    { title: "1. Who operates this service",
+      body: `PFA (Personal Finance Assistant) is operated by ${OPERATOR_NAME}. Contact: ${PRIVACY_EMAIL}` },
+    { title: "2. What data we collect",
+      body: "We collect your email address (for authentication) and the financial data you enter: transactions, recurring costs, investment positions, cash accounts, real estate, savings goals, and budget targets. We do not collect bank credentials or card numbers." },
+    { title: "3. Legal basis (GDPR Art. 6)",
+      body: "Processing is based on the performance of a contract (Art. 6(1)(b)) — we store your data to provide the service you signed up for." },
+    { title: "4. Third-party processors (GDPR Art. 28)",
+      body: `• Supabase, Inc. (database + auth): your data is stored in Supabase's EU data centre (${SUPABASE_REGION}). DPA available at supabase.com/privacy.\n• Anthropic, Inc. (AI): when you use AI chat, a structured summary of your financial data and your messages are sent to Anthropic's Claude API. Uploaded bank files are also sent (up to 14,000 chars). Anthropic processes data under their API DPA. Neither processor may use your data for other purposes.` },
+    { title: "5. Data retention",
+      body: "Data is kept while your account is active. You can delete everything via Account Settings at any time. Accounts inactive for 3+ years will be deleted after a 30-day notice email." },
+    { title: "6. Your rights (GDPR Art. 15–22)",
+      body: `Access · Correct · Erase (Art. 17) · Portability (Art. 20) · Object · Withdraw consent.\nUse Account Settings (Export / Delete) or email ${PRIVACY_EMAIL}. We respond within 30 days.` },
+    { title: "7. Household member data",
+      body: "If you enter data about other people (e.g. a partner's income), you confirm they are aware and have agreed." },
+    { title: "8. Security",
+      body: "All data is transmitted over HTTPS/TLS. Authentication uses passwordless magic links. Supabase enforces row-level security — each account can only access its own data." },
+    { title: "9. Supervisory authority",
+      body: "To lodge a complaint: NAIH – Nemzeti Adatvédelmi és Információszabadság Hatóság\nugyfelszolgalat@naih.hu · naih.hu" },
+  ];
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, maxWidth: 580, width: "100%", maxHeight: "88vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 18 }}>Privacy Policy</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 22, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 20 }}>
+          Last updated: 2026-06-01 · Operator: {OPERATOR_NAME} · {APP_DOMAIN} · {PRIVACY_EMAIL}
+        </div>
+        {sections.map(s => (
+          <div key={s.title} style={{ marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: C.text, marginBottom: 5 }}>{s.title}</div>
+            <div style={{ fontSize: 12, color: C.textSoft, lineHeight: 1.75, whiteSpace: "pre-line" }}>{s.body}</div>
+          </div>
+        ))}
+        <Btn onClick={onClose} style={{ width: "100%", marginTop: 8 }}>Close</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ─── GDPR Consent Gate ────────────────────────────────────────────────────────
+// Shown once per user after first login. Overlays main app until all boxes checked.
+function GDPRConsentGate({ userId, onAccept }) {
+  const [consent, setConsent]   = useState(false);
+  const [age, setAge]           = useState(false);
+  const [partner, setPartner]   = useState(false);
+  const [showPolicy, setShowPolicy] = useState(false);
+  const canAccept = consent && age && partner;
+
+  function accept() {
+    if (!canAccept) return;
+    try { localStorage.setItem(`${GDPR_CONSENT_KEY}_${userId}`, new Date().toISOString()); } catch (e) {}
+    onAccept();
+  }
+
+  return (
+    <>
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, maxWidth: 480, width: "100%" }}>
+          <div style={{ fontSize: 26, marginBottom: 12, textAlign: "center" }}>🔒</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 6, textAlign: "center" }}>Before you start</div>
+          <div style={{ fontSize: 13, color: C.muted, marginBottom: 24, lineHeight: 1.6, textAlign: "center" }}>
+            Please confirm the following to continue.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+            {[
+              { val: consent, set: setConsent, label: <>I have read and accept the{" "}<button onClick={() => setShowPolicy(true)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 13, padding: 0, textDecoration: "underline" }}>Privacy Policy</button>. I understand my data is stored on Supabase and AI chat sends a summary to Anthropic's API.</> },
+              { val: age,     set: setAge,     label: "I confirm I am 16 years of age or older (GDPR Art. 8)." },
+              { val: partner, set: setPartner, label: "If I add data about other household members, they are aware and have agreed." },
+            ].map((item, i) => (
+              <label key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", cursor: "pointer" }}>
+                <input type="checkbox" checked={item.val} onChange={e => item.set(e.target.checked)}
+                  style={{ marginTop: 2, width: 16, height: 16, flexShrink: 0, cursor: "pointer", accentColor: C.accent }} />
+                <span style={{ fontSize: 13, color: C.textSoft, lineHeight: 1.6 }}>{item.label}</span>
+              </label>
+            ))}
+          </div>
+          <Btn onClick={accept} disabled={!canAccept} style={{ width: "100%", padding: "12px 0", fontSize: 14 }}>
+            Continue to PFA →
+          </Btn>
+          {!canAccept && <div style={{ textAlign: "center", fontSize: 11, color: C.muted, marginTop: 8 }}>Please check all three boxes</div>}
+        </div>
+      </div>
+      {showPolicy && <PrivacyPolicyModal onClose={() => setShowPolicy(false)} />}
+    </>
+  );
+}
+
+// ─── Account Settings & Privacy Modal ─────────────────────────────────────────
+function AccountSettingsModal({ onClose, onExport, onDeleteRequest, userEmail, onShowPrivacy }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleted, setDeleted] = useState(false);
+
+  async function handleDelete() {
+    setDeleting(true);
+    await onDeleteRequest();
+    setDeleted(true);
+    setDeleting(false);
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, maxWidth: 420, width: "100%" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div style={{ fontWeight: 700, fontSize: 18 }}>Account &amp; Privacy</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 22, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 20 }}>
+          Signed in as <strong style={{ color: C.textSoft }}>{userEmail}</strong>
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <Btn variant="ghost" onClick={onExport} style={{ width: "100%", textAlign: "left", padding: "11px 16px" }}>
+            📥 Export my data (JSON)
+          </Btn>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4, paddingLeft: 4 }}>
+            GDPR Art. 20 — right to data portability. Downloads all your financial data as JSON.
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <Btn variant="ghost" onClick={() => { onClose(); onShowPrivacy(); }} style={{ width: "100%", textAlign: "left", padding: "11px 16px" }}>
+            🔒 View Privacy Policy
+          </Btn>
+        </div>
+
+        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+          {deleted ? (
+            <div style={{ background: C.green + "18", border: `1px solid ${C.green}44`, borderRadius: 10, padding: 14, fontSize: 13, color: C.green, lineHeight: 1.7 }}>
+              ✓ Your financial data has been deleted and you have been signed out.<br />
+              <span style={{ fontSize: 11, color: C.muted }}>Login email queued for removal within 7 days. To expedite: {PRIVACY_EMAIL}</span>
+            </div>
+          ) : !confirmDelete ? (
+            <>
+              <Btn variant="danger" onClick={() => setConfirmDelete(true)} style={{ width: "100%", padding: "10px 0" }}>
+                Delete my account and all data
+              </Btn>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 6, textAlign: "center" }}>
+                GDPR Art. 17 — right to erasure. Permanently deletes all financial data.
+              </div>
+            </>
+          ) : (
+            <div style={{ background: C.red + "18", border: `1px solid ${C.red}44`, borderRadius: 10, padding: 16 }}>
+              <div style={{ fontWeight: 700, color: C.red, marginBottom: 8 }}>Are you sure?</div>
+              <div style={{ fontSize: 12, color: C.textSoft, marginBottom: 16, lineHeight: 1.6 }}>
+                This permanently deletes all your costs, transactions, investments, and savings. Cannot be undone.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn variant="danger" disabled={deleting} onClick={handleDelete} style={{ flex: 1 }}>
+                  {deleting ? "Deleting…" : "Yes, delete everything"}
+                </Btn>
+                <Btn variant="ghost" onClick={() => setConfirmDelete(false)} style={{ flex: 1 }}>Cancel</Btn>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -3106,9 +3323,14 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
 // ─── AI System Prompt ─────────────────────────────────────────────────────────
 function buildSystemPrompt(data, readonly, todayDate) {
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  // GDPR Art. 5(1)(c) data minimisation: strip real-estate address (not needed for AI queries)
+  const safeData = {
+    ...data,
+    realEstate: (data.realEstate || []).map(({ address: _omit, ...rest }) => rest),
+  };
   return `You are PFA, a personal finance assistant for a Hungarian household. Today is ${todayDate}.
 Primary currency: HUF (EUR≈358 HUF, USD≈310 HUF).
-Current household data: ${JSON.stringify(data)}
+Current household data: ${JSON.stringify(safeData)}
 
 ${readonly ? "DEMO MODE: Answer questions only. Do not suggest data mutations or output IMPORT_BATCH blocks." : `
 You operate in one of three modes depending on the user's message:
@@ -3577,7 +3799,7 @@ function QuickAdd({ setData, onClose, isMobile }) {
 }
 
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
-function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport, isMobile, initialMessage, clearInitialMessage, triggerFileOpen, clearTriggerFileOpen }) {
+function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport, isMobile, initialMessage, clearInitialMessage, triggerFileOpen, clearTriggerFileOpen, onShowPrivacy }) {
   const [messages, setMessages] = useState([]);
   const [history, setHistory] = useState([]);
   const [input, setInput] = useState("");
@@ -3831,6 +4053,11 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontWeight: 700, color: C.accent }}>✦ PFA Assistant</span>
           {readonly && <Tag color={C.orange}>Demo</Tag>}
+          {!readonly && (
+            <button onClick={onShowPrivacy}
+              title="Messages and your financial data are sent to Anthropic's API. Click for Privacy Policy."
+              style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: "0 2px", lineHeight: 1 }}>ℹ️</button>
+          )}
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button onClick={() => setMinimized(true)} title="Minimize"
@@ -3853,6 +4080,13 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
               📎 OTP_march_statement.xlsx<br />
               📎 IBKR_positions.csv
             </div>
+            {!readonly && (
+              <div style={{ marginTop: 16, padding: "9px 12px", background: C.surfaceHigh, borderRadius: 8, fontSize: 11, color: C.muted, lineHeight: 1.65, textAlign: "left" }}>
+                🔒 Your messages and a financial data summary are sent to Anthropic's API.
+                Uploaded files are also sent for parsing.{" "}
+                <button onClick={onShowPrivacy} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11, padding: 0, textDecoration: "underline" }}>Privacy policy</button>
+              </div>
+            )}
           </div>
         )}
 
@@ -3990,6 +4224,11 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
               </div>
             );
           })()}
+          {/* GDPR: file will be sent to Anthropic — notify user */}
+          <div style={{ background: C.blue + "15", border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "7px 10px", marginTop: 6, marginBottom: 6, fontSize: 11, color: C.textSoft, lineHeight: 1.55 }}>
+            🔒 This file will be sent to Anthropic's API for parsing. Remove sensitive rows (e.g. recipient names) if needed.{" "}
+            <button onClick={onShowPrivacy} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11, padding: 0, textDecoration: "underline" }}>Privacy policy</button>
+          </div>
           {!fileType && (
             <div>
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>What type of file is this?</div>
@@ -4083,6 +4322,10 @@ function AppInner() {
   const [pendingChatMessage, setPendingChatMessage] = useState(null); // pre-fill message from quick-start tile
   const [pendingFileOpen, setPendingFileOpen] = useState(false); // trigger file input from quick-start tile
   const [darkMode, setDarkMode] = useState(true);
+  // GDPR
+  const [consentGiven, setConsentGiven]           = useState(false);
+  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
+  const [showAccountSettings, setShowAccountSettings] = useState(false);
   Object.assign(C, darkMode ? DARK_C : LIGHT_C);
 
   function handleImport(file, fileType) {
@@ -4116,13 +4359,41 @@ function AppInner() {
   useEffect(() => {
     if (!authReady) return;
     if (isDemo) {
-      // Use hardcoded demo data — no Supabase dependency, always fresh
       setHouseholdId(DEMO_ID);
       setDataRaw(normalizeData(DEMO_DATA));
+      setConsentGiven(true); // demo skips consent gate
     } else if (session?.user) {
+      // GDPR: check if this user has previously accepted the privacy policy
+      try {
+        const stored = localStorage.getItem(`${GDPR_CONSENT_KEY}_${session.user.id}`);
+        setConsentGiven(!!stored);
+      } catch (e) {
+        setConsentGiven(true); // localStorage unavailable — don't block access
+      }
       loadOrCreateHousehold(session.user.id);
     }
   }, [session, isDemo, authReady]);
+
+  // GDPR Art. 17 — right to erasure
+  // Deletes all financial data from Supabase then signs out.
+  // Note: Supabase auth record (email only) requires admin API; purged within 7 days or on request.
+  async function deleteAccount() {
+    if (!session?.user) return;
+    await supabase.from("households").delete().eq("user_id", session.user.id);
+    await signOut();
+  }
+
+  // GDPR Art. 20 — right to data portability
+  function exportData() {
+    const payload = { exported_at: new Date().toISOString(), version: "1.0", data };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `pfa_export_${todayStr()}.json`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  }
 
   async function loadOrCreateHousehold(userId) {
     let { data: row, error } = await supabase.from("households").select("id, data").eq("user_id", userId).single();
@@ -4206,6 +4477,20 @@ function AppInner() {
         <div style={{ display: "flex", gap: isMobile ? 6 : 10, alignItems: "center" }}>
           {saving && !isMobile && <span style={{ fontSize: 11, color: C.muted }}>Saving…</span>}
           {saveError && <span style={{ fontSize: 11, color: C.red, cursor: "pointer" }} onClick={() => setSaveError(false)} title="Data may not have saved — check your connection">⚠{isMobile ? "" : " Save failed"}</span>}
+          {/* Privacy policy link — always visible on desktop */}
+          {!isMobile && (
+            <button onClick={() => setShowPrivacyPolicy(true)}
+              style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 11, padding: "0 2px", textDecoration: "underline" }}>
+              Privacy
+            </button>
+          )}
+          {/* Account & Privacy settings — authenticated users only */}
+          {!readonly && (
+            <button onClick={() => setShowAccountSettings(true)} title="Account & Privacy Settings"
+              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 14, color: C.muted, lineHeight: 1 }}>
+              ⚙
+            </button>
+          )}
           <button onClick={() => setDarkMode(d => !d)} title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
             style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 14, color: C.muted, lineHeight: 1 }}>
             {darkMode ? "☀" : "🌙"}
@@ -4284,7 +4569,24 @@ function AppInner() {
         <QuickAdd setData={setData} onClose={() => setQuickAddOpen(false)} isMobile={isMobile} />
       )}
 
-      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} initialMessage={pendingChatMessage} clearInitialMessage={() => setPendingChatMessage(null)} triggerFileOpen={pendingFileOpen} clearTriggerFileOpen={() => setPendingFileOpen(false)} />
+      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} initialMessage={pendingChatMessage} clearInitialMessage={() => setPendingChatMessage(null)} triggerFileOpen={pendingFileOpen} clearTriggerFileOpen={() => setPendingFileOpen(false)} onShowPrivacy={() => setShowPrivacyPolicy(true)} />
+
+      {/* ── GDPR: Consent gate — shown once per user on first login ── */}
+      {!isDemo && session?.user && !consentGiven && (
+        <GDPRConsentGate userId={session.user.id} onAccept={() => setConsentGiven(true)} />
+      )}
+      {/* ── GDPR: Privacy Policy modal ── */}
+      {showPrivacyPolicy && <PrivacyPolicyModal onClose={() => setShowPrivacyPolicy(false)} />}
+      {/* ── GDPR: Account settings (export + delete) ── */}
+      {showAccountSettings && !readonly && (
+        <AccountSettingsModal
+          onClose={() => setShowAccountSettings(false)}
+          onExport={exportData}
+          onDeleteRequest={deleteAccount}
+          userEmail={session?.user?.email}
+          onShowPrivacy={() => setShowPrivacyPolicy(true)}
+        />
+      )}
     </div>
   );
 }
