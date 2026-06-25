@@ -138,16 +138,17 @@ function tryParseRevolutCSV(text, learnedRules = {}) {
 
     // 2. Hard-coded fallbacks (ASCII merchant names survive encoding)
     if (!category) {
-      if (/lidl|spar|aldi|tesco|penny|cba|yolo food|cityfood|vegafutar|obstermann|flekken|kebab|bisztro|pizza|kurtoskalacs|cukraszda|bundiner|kifli|balena|ichigo|burger|restau/i.test(d)) category = 'Food';
-      else if (/patika|pharmy|pharmacy|pingvin|gyogyszer/i.test(d)) category = 'Health';
-      else if (/mvm|dijnet|e\.on|nmhh/i.test(d)) category = 'Utilities';
-      else if (/omv|mol |shell|bkk|vonat|mav|parking|bolt taxi|uber/i.test(d)) category = 'Transport';
-      else if (/netflix|spotify|tv2|arena|steam|mozi|cinema/i.test(d)) category = 'Entertainment';
-      else if (/zara|h&m|sinsay|pepco|reserved|vinted|deichmann|tshirt/i.test(d)) category = 'Clothing';
-      else if (/hornbach|obi|bauhaus|leroy|kerteszet|garden/i.test(d)) category = 'Garden';
-      else if (/temu|emag|alza|zooplus|tchibo/i.test(d)) category = 'Other';
+      if (/lidl|spar|aldi|tesco|penny|cba|yolo food|cityfood|vegafutar|obstermann|flekken|kebab|bisztro|pizza|kurtoskalacs|cukraszda|bundiner|kifli|balena|ichigo|burger|restau|wolt|foodora|mcdonald|kfc|subway|auchan|interspar|chio|gyros|shawarma|sushi|market|grocery|supermar|etel|elelmis|hentesbolt|pekseg|bakery|food|lunch|dinner/i.test(d)) category = 'Food';
+      else if (/patika|pharmy|pharmacy|pingvin|gyogyszer|benu|fogaszat|fogorvos|optika|szemeszet|rendelo|korhaz|orvos|doktor|klinika|laborat|rhone|gyogyito|vitamin|docler|semmelweis/i.test(d)) category = 'Health';
+      else if (/mvm|dijnet|e\.on|nmhh|telenor|yettel|vodafone|\bupc\b|digi|telekom|biztosit|allianz|generali|aegon|\bnn\b|union bizt|aon|internet|mobilnet|foldgaz|gazszolg|arviz|vizmuvek|szemet|kukasszolg/i.test(d)) category = 'Utilities';
+      else if (/omv|mol |shell|bkk|vonat|mav|parking|bolt taxi|uber|e-matrica|autopalya|wizzair|ryanair|flixbus|buszjegy|taxi|autopalya|interrail|airport|repter|repjegy|benzin|diesel|car wash/i.test(d)) category = 'Transport';
+      else if (/netflix|spotify|tv2|arena|steam|mozi|cinema|hbo|disney|apple\.com|youtube|prime video|twitch|jegy|billett|koncert|theater|szinhaz|museum|muzeum|kindle|audible/i.test(d)) category = 'Entertainment';
+      else if (/zara|h&m|sinsay|pepco|reserved|vinted|deichmann|tshirt|nike|adidas|decathlon|\bc&a\b|pull.bear|mango|uniqlo|\bkik\b|primark|about you|answear|sportisimo|hervis/i.test(d)) category = 'Clothing';
+      else if (/hornbach|obi|bauhaus|leroy|kerteszet|garden|ikea|kika|jysk|depot|mr bricolage|praktiker|lezser|furdo|homedepo/i.test(d)) category = 'Garden';
+      else if (/temu|emag|alza|zooplus|tchibo|aliexpress|amazon|ebay/i.test(d)) category = 'Other';
       // Transfer detection via type column ('tual' survives from 'átutalás')
       else if (/tual|transfer/i.test(txType)) category = isIncome ? 'Income' : 'Transfer';
+      else if (/atm|kesz|cash kivét|bankkiol/i.test(d)) category = 'Transfer';
       else if (isIncome) category = 'Income';
       else category = 'Other';
     }
@@ -157,6 +158,93 @@ function tryParseRevolutCSV(text, learnedRules = {}) {
   return rows.length > 0 ? rows : null;
 }
 
+// ─── Erste XLSX parser (client-side, no token limits) ────────────────────────
+// Takes a SheetJS workbook (already read with { cellDates: true }) and returns
+// an array of transaction rows, or null if the file is not an Erste statement.
+function tryParseErsteXLSX(wb, learnedRules = {}) {
+  if (!wb || !wb.SheetNames || !wb.SheetNames.length) return null;
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return null;
+  const rows = window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  // Detection: cell A1 contains a string starting with "Erste"
+  if (!rows[0] || typeof rows[0][0] !== "string" || !rows[0][0].startsWith("Erste")) return null;
+  // Row index 3 (4th row) holds the Hungarian column headers
+  const headerRow = rows[3];
+  if (!headerRow) return null;
+  const col = {};
+  headerRow.forEach((h, i) => { if (h != null) col[String(h).trim()] = i; });
+  const cDate = col["Könyvelés dátuma"];
+  const cAmt  = col["Összeg"];
+  const cCur  = col["Devizanem"];
+  const cPart = col["Partner név"];
+  const cBook = col["Könyvelési információk"];
+  const cNote = col["Közlemény"];
+  const cTxn  = col["Tranzakció dátuma és ideje"];
+  if (cDate === undefined || cAmt === undefined) return null;
+
+  function excelDateToISO(v) {
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === "number") return new Date((v - 25569) * 86400000).toISOString().slice(0, 10);
+    if (typeof v === "string") return v.slice(0, 10).replace(/\./g, "-");
+    return null;
+  }
+
+  const transactions = [];
+  for (let i = 4; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.every(v => v == null || v === "")) continue;
+    const rawDate = row[cDate];
+    const rawAmt  = row[cAmt];
+    if (rawDate == null || rawAmt == null) continue;
+    const amount = typeof rawAmt === "number" ? rawAmt : parseFloat(String(rawAmt).replace(/,/g, "."));
+    if (isNaN(amount) || amount === 0) continue;
+
+    // Prefer the more precise transaction datetime; fall back to booking date
+    const txnStr = cTxn != null ? row[cTxn] : null;
+    const dateStr = (txnStr && typeof txnStr === "string")
+      ? txnStr.slice(0, 10).replace(/\./g, "-")
+      : excelDateToISO(rawDate);
+    if (!dateStr || !dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) continue;
+
+    const partner = cPart != null && row[cPart] ? String(row[cPart]).trim() : "";
+    const booking = cBook != null && row[cBook] ? String(row[cBook]).trim() : "";
+    const note    = cNote != null && row[cNote] ? String(row[cNote]).trim() : "";
+    const currency = cCur != null && row[cCur] ? String(row[cCur]).trim() : "HUF";
+
+    // Build description: partner name is cleanest; extract merchant from card
+    // booking info ("478738xxxxxx0458 REFCODE merchantname CITY DDMMYYHH:MM") as fallback
+    let desc = partner;
+    if (!desc && booking) {
+      const cardMerchant = booking.match(/\d{16}\s+\w+\s+([\w.*\-]+(?:\.\w+)*)\s/);
+      desc = cardMerchant
+        ? cardMerchant[1]
+        : booking.replace(/Trn:.*|Oth\.\w.*$/g, "").trim().slice(0, 60);
+    }
+    if (!desc && note) desc = note.slice(0, 60);
+    desc = desc.trim();
+    if (!desc) continue;
+
+    const type = amount < 0 ? "expense" : "income";
+    const absAmt = Math.abs(amount);
+    let category = inferCategory(desc, learnedRules);
+    if (!category) {
+      const d = desc.toLowerCase();
+      if (/lidl|spar|aldi|tesco|penny|cba|\bdm\b|yolo food|vegafutar|kifli|balena|ichigo|burger|bisztro|pizza|kebab|restau|cukraszda|wolt|foodora|mcdonald|kfc|subway|auchan|interspar|chio|gyros|shawarma|sushi|market|grocery|supermar|etel|elelmis|hentesbolt|pekseg|bakery|food|lunch|dinner/i.test(d)) category = "Food";
+      else if (/patika|pharmy|pingvin|gyogyszer|benu|fogaszat|fogorvos|optika|szemeszet|rendelo|korhaz|orvos|doktor|klinika|laborat|rhone|gyogyito|vitamin|docler|semmelweis/i.test(d)) category = "Health";
+      else if (/mvm|dijnet|e\.on|nmhh|telekomfelt|telekom|telenor|yettel|vodafone|\bupc\b|digi|biztosit|allianz|generali|aegon|\bnn\b|union bizt|aon|internet|mobilnet|foldgaz|gazszolg|arviz|vizmuvek|szemet|kukasszolg/i.test(d)) category = "Utilities";
+      else if (/omv|\bmol\b|shell|bkk|vonat|mav|parking|uber|e-matrica|autopalya|wizzair|ryanair|flixbus|buszjegy|taxi|interrail|airport|repter|repjegy|benzin|diesel|car wash/i.test(d)) category = "Transport";
+      else if (/netflix|spotify|steam|mozi|cinema|simplep\*kaki|arena|hbo|disney|apple\.com|youtube|prime video|twitch|jegy|billett|koncert|theater|szinhaz|museum|muzeum|kindle|audible/i.test(d)) category = "Entertainment";
+      else if (/zara|h&m|sinsay|pepco|reserved|vinted|deichmann|nike|adidas|decathlon|\bc&a\b|pull.bear|mango|uniqlo|\bkik\b|primark|about you|answear|sportisimo|hervis/i.test(d)) category = "Clothing";
+      else if (/hornbach|obi|bauhaus|leroy|kerteszet|ikea|kika|jysk|depot|mr bricolage|praktiker|furdo|homedepo/i.test(d)) category = "Garden";
+      else if (/revolut|atm|kesz|cash kivét|bankkiol/i.test(d)) category = "Transfer";
+      else if (type === "income") category = "Income";
+      else category = "Other";
+    }
+    transactions.push({ date: dateStr, desc, amount: absAmt, currency, category, type, account: "Erste" });
+  }
+  return transactions.length > 0 ? transactions : null;
+}
+
 // Convert uploaded file → plain CSV text for Claude to read
 async function fileToText(file) {
   const ext = file.name.split(".").pop().toLowerCase();
@@ -164,10 +252,20 @@ async function fileToText(file) {
   if (ext === "xlsx" || ext === "xls") {
     await loadXLSX();
     const buf = await file.arrayBuffer();
-    const wb = window.XLSX.read(buf, { type: "array" });
-    return wb.SheetNames.map(name =>
-      `--- Sheet: ${name} ---\n` + window.XLSX.utils.sheet_to_csv(wb.Sheets[name])
-    ).join("\n\n");
+    // cellDates: true converts Excel serial date numbers to JS Date objects,
+    // so Claude receives readable ISO dates (2026-05-31) instead of serials (46173).
+    const wb = window.XLSX.read(buf, { type: "array", cellDates: true });
+    return wb.SheetNames.map(name => {
+      const sheetRows = window.XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: "" });
+      const csv = sheetRows.map(row =>
+        row.map(v => {
+          if (v instanceof Date) return v.toISOString().slice(0, 10);
+          const s = String(v);
+          return (s.includes(",") || s.includes('"')) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        }).join(",")
+      ).join("\n");
+      return `--- Sheet: ${name} ---\n` + csv;
+    }).join("\n\n");
   }
   throw new Error("Unsupported file type. Please upload .csv, .xlsx or .xls");
 }
@@ -1438,9 +1536,61 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
 
   if (data.transactions.length === 0) return <GettingStarted tab="cashflow" readonly={readonly} onOpenChat={onOpenChat} onOpenUpload={onOpenUpload} />;
 
+  const otherTxns = data.transactions.filter(t => t.category === "Other" && t.type === "expense");
+  const [showOtherReview, setShowOtherReview] = useState(true);
+
+  function reclassify(txId, newCat) {
+    const tx = data.transactions.find(t => t.id === txId);
+    const keyword = tx ? (tx.desc || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4) : null;
+    setData(d => ({
+      ...d,
+      transactions: d.transactions.map(t => t.id === txId ? { ...t, category: newCat } : t),
+      merchantRules: keyword
+        ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }]
+        : (d.merchantRules || [])
+    }));
+  }
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <FileUploadCard defaultType="bank_statement" onFileReady={onImport} readonly={readonly} />
+
+      {/* Uncategorized review banner */}
+      {!readonly && showOtherReview && otherTxns.length > 0 && (
+        <Card style={{ borderLeft: `3px solid ${C.orange}`, padding: "12px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div>
+              <span style={{ fontWeight: 600, fontSize: 13, color: C.orange }}>⚠ {otherTxns.length} uncategorized transaction{otherTxns.length > 1 ? "s" : ""}</span>
+              <span style={{ fontSize: 12, color: C.muted, marginLeft: 8 }}>— fix them here, they'll be remembered next time</span>
+            </div>
+            <button onClick={() => setShowOtherReview(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 16, lineHeight: 1, padding: "0 4px" }}>×</button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {otherTxns.slice(0, 15).map(t => (
+              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                <span style={{ color: C.muted, flexShrink: 0, width: 72 }}>{t.date}</span>
+                <span style={{ flex: 1, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.desc}>{t.desc}</span>
+                <span style={{ color: C.red, flexShrink: 0, fontVariantNumeric: "tabular-nums", width: 80, textAlign: "right" }}>
+                  −{t.amount?.toLocaleString()} {t.currency}
+                </span>
+                <select
+                  value="Other"
+                  onChange={e => reclassify(t.id, e.target.value)}
+                  style={{ fontSize: 11, padding: "2px 4px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer", flexShrink: 0 }}
+                >
+                  <option value="Other" disabled>Categorize…</option>
+                  {CATEGORIES.filter(c => c !== "Income").map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            ))}
+            {otherTxns.length > 15 && (
+              <div style={{ fontSize: 11, color: C.muted, textAlign: "center", paddingTop: 4 }}>
+                + {otherTxns.length - 15} more — use the transaction list below to fix the rest
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       {/* Monthly overview chart */}
       {monthlySummary.length > 1 && (
@@ -3873,9 +4023,34 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const text = await fileToText(file);
-      // Try Revolut direct parse — bypasses Claude token limits entirely
       const learnedRules = buildLearnedRules(data.transactions || [], data.merchantRules || []);
+      const ext = file.name.split(".").pop().toLowerCase();
+
+      // ── XLSX: try Erste direct parse first (bypasses Claude entirely) ──
+      if (ext === "xlsx" || ext === "xls") {
+        await loadXLSX();
+        const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+        const ersteRows = tryParseErsteXLSX(wb, learnedRules);
+        if (ersteRows && ersteRows.length > 0) {
+          const dups = markDuplicates(ersteRows, data.transactions || []);
+          const dupCount = dups.filter(Boolean).length;
+          const dupNote = dupCount > 0 ? ` ${dupCount} look like duplicates and have been pre-unchecked.` : "";
+          setMessages(m => [...m, { role: "user", content: `📎 ${file.name} [Bank statement]` }]);
+          setMessages(m => [...m, { role: "assistant", content: `Detected Erste bank statement — parsed ${ersteRows.length} transactions using your learned categorization rules.${dupNote} Review and confirm below.` }]);
+          setPendingBatch({
+            type: "transactions",
+            summary: `${ersteRows.length} transactions from ${file.name}${dupCount > 0 ? ` · ${dupCount} possible duplicate${dupCount === 1 ? "" : "s"}` : ""}`,
+            items: ersteRows,
+            duplicates: dups,
+            checked: dups.map(d => !d),
+          });
+          e.target.value = "";
+          return;
+        }
+      }
+
+      const text = await fileToText(file);
+      // ── CSV: try Revolut direct parse (bypasses Claude token limits entirely) ──
       const revRows = tryParseRevolutCSV(text, learnedRules);
       if (revRows && revRows.length > 0) {
         const dups = markDuplicates(revRows, data.transactions || []);
@@ -4283,6 +4458,392 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   );
 }
 
+// ─── Cash Flow & Expenses Tab (merged) ────────────────────────────────────────
+function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpenUpload, viewMonth }) {
+  const isMobile = useIsMobile();
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  // Uncategorized review
+  const [showOtherReview, setShowOtherReview] = useState(true);
+  const otherTxns = data.transactions.filter(t => t.category === "Other" && t.type === "expense");
+
+  function reclassify(txId, newCat) {
+    const tx = data.transactions.find(t => t.id === txId);
+    const keyword = tx ? (tx.desc || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4) : null;
+    setData(d => ({
+      ...d,
+      transactions: d.transactions.map(t => t.id === txId ? { ...t, category: newCat } : t),
+      merchantRules: keyword
+        ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }]
+        : (d.merchantRules || [])
+    }));
+  }
+
+  // Transaction list state
+  const [txOpen, setTxOpen] = useState(false);
+  const [filterCat, setFilterCat] = useState("All");
+  const [filterAmtMin, setFilterAmtMin] = useState("");
+  const [filterAmtMax, setFilterAmtMax] = useState("");
+  const [filterType, setFilterType] = useState("all"); // "all" | "transaction" | "bill"
+  const [filterSort, setFilterSort] = useState("date_desc");
+  const [adding, setAdding] = useState(false);
+  const [addTarget, setAddTarget] = useState("transaction");
+  const [txForm, setTxForm] = useState({ date: "", desc: "", amount: "", currency: "HUF", category: "Food", type: "expense", account: "OTP" });
+  const [billForm, setBillForm] = useState({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
+
+  // ── Computed data ──
+  const allMonths = [...new Set(data.transactions.map(t => t.date?.slice(0, 7)).filter(Boolean))].sort();
+  const monthTxns = data.transactions.filter(t => t.date?.startsWith(viewMonth));
+  const income = monthTxns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+  const expenses = monthTxns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+  const net = income - expenses;
+  const savingsRate = income > 0 ? Math.round((net / income) * 100) : null;
+
+  const monthlySummary = allMonths.map(ym => {
+    const txns = data.transactions.filter(t => t.date?.startsWith(ym));
+    const inc = txns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+    const exp = txns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+    const [y, m] = ym.split("-").map(Number);
+    return { month: new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "short", year: "2-digit" }), income: Math.round(inc), expenses: Math.round(exp) };
+  });
+
+  const byCategory = CATEGORIES.filter(c => c !== "Income" && c !== "Transfer").map(cat => ({
+    name: cat,
+    value: monthTxns.filter(t => t.category === cat && t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0)
+  })).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+
+  const cumulativeData = (() => {
+    const dayTotals = {};
+    monthTxns.forEach(t => {
+      const day = t.date?.slice(8, 10); if (!day) return;
+      const val = t.type === "income" ? toHUF(t.amount, t.currency) : -toHUF(Math.abs(t.amount), t.currency);
+      dayTotals[day] = (dayTotals[day] || 0) + val;
+    });
+    let cum = 0;
+    return Object.keys(dayTotals).sort().map(day => {
+      cum += dayTotals[day];
+      const cn = Math.round(cum);
+      return { day: `${parseInt(day)}`, cumNet: cn, cumPos: cn >= 0 ? cn : 0, cumNeg: cn < 0 ? cn : 0 };
+    });
+  })();
+
+  // ── Filtered transaction list ──
+  const bills = data.costs || [];
+  const filteredItems = (() => {
+    let items = [];
+    if (filterType === "all" || filterType === "transaction") {
+      items = [...items, ...monthTxns.filter(t => t.type === "expense").map(t => ({ ...t, _kind: "transaction" }))];
+    }
+    if (filterType === "all" || filterType === "bill") {
+      items = [...items, ...bills.map(b => ({ id: b.id, date: b.nextDue || viewMonth + "-01", desc: b.name, amount: b.amount, currency: b.currency, category: b.category, type: "expense", _kind: "bill" }))];
+    }
+    if (filterCat !== "All") items = items.filter(t => t.category === filterCat);
+    if (filterAmtMin) items = items.filter(t => toHUF(Math.abs(t.amount), t.currency) >= parseFloat(filterAmtMin));
+    if (filterAmtMax) items = items.filter(t => toHUF(Math.abs(t.amount), t.currency) <= parseFloat(filterAmtMax));
+    if (filterSort === "date_desc") items.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    else if (filterSort === "date_asc") items.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    else if (filterSort === "amt_desc") items.sort((a, b) => toHUF(Math.abs(b.amount), b.currency) - toHUF(Math.abs(a.amount), a.currency));
+    else if (filterSort === "amt_asc") items.sort((a, b) => toHUF(Math.abs(a.amount), a.currency) - toHUF(Math.abs(b.amount), b.currency));
+    return items;
+  })();
+
+  function addTransaction() {
+    if (!txForm.date || !txForm.desc || !txForm.amount) return;
+    const amt = txForm.type === "expense" ? -Math.abs(parseFloat(txForm.amount)) : Math.abs(parseFloat(txForm.amount));
+    setData(d => ({ ...d, transactions: [{ ...txForm, id: Date.now().toString(), amount: amt }, ...d.transactions] }));
+    setAdding(false);
+  }
+  function addBill() {
+    if (!billForm.name || !billForm.amount) return;
+    setData(d => ({ ...d, costs: [...d.costs, { ...billForm, id: Date.now().toString(), amount: parseFloat(billForm.amount) }] }));
+    setAdding(false);
+    setBillForm({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
+  }
+
+  const isEmpty = data.transactions.length === 0 && data.costs.length === 0;
+  if (isEmpty) return <GettingStarted tab="cashflow" readonly={readonly} onOpenChat={onOpenChat} onOpenUpload={onOpenUpload} />;
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+
+      {/* ── Upload ── */}
+      <FileUploadCard defaultType="bank_statement" onFileReady={onImport} readonly={readonly} />
+
+      {/* ── Uncategorized review ── */}
+      {!readonly && showOtherReview && otherTxns.length > 0 && (
+        <Card style={{ borderLeft: `3px solid ${C.orange}`, padding: "12px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div>
+              <span style={{ fontWeight: 600, fontSize: 13, color: C.orange }}>⚠ {otherTxns.length} uncategorized transaction{otherTxns.length > 1 ? "s" : ""}</span>
+              <span style={{ fontSize: 12, color: C.muted, marginLeft: 8 }}>— fix them here, they'll be remembered next time</span>
+            </div>
+            <button onClick={() => setShowOtherReview(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 16, lineHeight: 1, padding: "0 4px" }}>×</button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {otherTxns.slice(0, 15).map(t => (
+              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                <span style={{ color: C.muted, flexShrink: 0, width: 72 }}>{t.date}</span>
+                <span style={{ flex: 1, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.desc}>{t.desc}</span>
+                <span style={{ color: C.red, flexShrink: 0, fontVariantNumeric: "tabular-nums", width: 80, textAlign: "right" }}>−{Math.abs(t.amount)?.toLocaleString()} {t.currency}</span>
+                <select value="Other" onChange={e => reclassify(t.id, e.target.value)}
+                  style={{ fontSize: 11, padding: "2px 4px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer", flexShrink: 0 }}>
+                  <option value="Other" disabled>Categorize…</option>
+                  {CATEGORIES.filter(c => c !== "Income").map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            ))}
+            {otherTxns.length > 15 && <div style={{ fontSize: 11, color: C.muted, textAlign: "center", paddingTop: 4 }}>+ {otherTxns.length - 15} more — use "Browse" below to fix the rest</div>}
+          </div>
+        </Card>
+      )}
+
+      {/* ── Stat tiles ── */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 12 }}>
+        <Card><Stat label="Income" value={`+${fmtHUF(income)}`} color={C.green} /></Card>
+        <Card><Stat label="Expenses" value={`−${fmtHUF(expenses)}`} color={C.red} /></Card>
+        <Card><Stat label="Net" value={`${net >= 0 ? "+" : "−"}${fmtHUF(Math.abs(net))}`} color={net >= 0 ? C.green : C.red} /></Card>
+        <Card>
+          <Stat label="Savings Rate" value={savingsRate !== null ? `${savingsRate}%` : "—"}
+            color={savingsRate === null ? C.muted : savingsRate >= 20 ? C.green : savingsRate > 0 ? C.orange : C.red} />
+          {savingsRate !== null && <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 3 }}>of income saved</div>}
+        </Card>
+      </div>
+
+      {/* ── Monthly overview (all months) ── */}
+      {monthlySummary.length > 1 && (
+        <Card>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Monthly Overview</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>Income vs expenses across all months</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={monthlySummary} barGap={2}>
+              <XAxis dataKey="month" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
+              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12, color: C.muted }} />
+              <Bar dataKey="income" name="Income" fill={C.green} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="expenses" name="Expenses" fill={C.red} radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* ── Cumulative cashflow — tap to see value ── */}
+      {cumulativeData.length > 1 && (
+        <Card>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Cumulative Cashflow</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
+            Running net through {new Date(viewMonth + "-01").toLocaleString("en-GB", { month: "long" })} — tap any point to see the value
+          </div>
+          <ResponsiveContainer width="100%" height={165}>
+            <ComposedChart data={cumulativeData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <defs>
+                <linearGradient id="gradPos" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.green} stopOpacity={0.5} /><stop offset="95%" stopColor={C.green} stopOpacity={0.05} />
+                </linearGradient>
+                <linearGradient id="gradNeg" x1="0" y1="1" x2="0" y2="0">
+                  <stop offset="5%" stopColor={C.red} stopOpacity={0.5} /><stop offset="95%" stopColor={C.red} stopOpacity={0.05} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
+              <Tooltip formatter={(v, name) => name === "Net" ? [fmtHUF(v), "Cumulative net"] : null}
+                contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <ReferenceLine y={0} stroke={C.border} strokeWidth={1} strokeDasharray="4 4" />
+              <Area type="monotone" dataKey="cumPos" stroke="none" fill="url(#gradPos)" dot={false} legendType="none" />
+              <Area type="monotone" dataKey="cumNeg" stroke="none" fill="url(#gradNeg)" dot={false} legendType="none" />
+              <Line type="monotone" dataKey="cumNet" name="Net" stroke={C.text} strokeWidth={2} dot={{ r: 3, fill: C.text, strokeWidth: 0 }} activeDot={{ r: 5, fill: C.accent }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* ── Expense breakdown — tap bar to filter ── */}
+      {byCategory.length > 0 && (
+        <Card>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontWeight: 600 }}>Expense Breakdown</div>
+            {filterCat !== "All" && (
+              <button onClick={() => setFilterCat("All")} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surfaceHigh, color: C.muted, cursor: "pointer" }}>
+                Clear filter ×
+              </button>
+            )}
+          </div>
+          <ResponsiveContainer width="100%" height={Math.max(140, byCategory.length * 34)}>
+            <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 16 }}>
+              <XAxis type="number" tick={{ fill: C.text, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" tick={{ fill: C.text, fontSize: 11 }} width={96} axisLine={false} tickLine={false} interval={0} />
+              <Tooltip formatter={v => [fmtHUF(v), "Spent"]} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} cursor={{ fill: C.surfaceHigh }} />
+              <Bar dataKey="value" radius={[0, 4, 4, 0]} style={{ cursor: "pointer" }}
+                onClick={(entry) => { setFilterCat(entry.name); setTxOpen(true); setFilterType("transaction"); }}>
+                {byCategory.map((entry, i) => (
+                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]}
+                    opacity={filterCat === "All" || filterCat === entry.name ? 1 : 0.35} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 6, textAlign: "right" }}>Tap a bar to filter the list below ↓</div>
+        </Card>
+      )}
+
+      {/* ── Browse transactions & costs ── */}
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <button onClick={() => setTxOpen(o => !o)}
+          style={{ width: "100%", padding: "14px 20px", display: "flex", alignItems: "center", gap: 10, background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
+          <span style={{ fontSize: 16 }}>📋</span>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>Browse transactions & costs</span>
+            <span style={{ fontSize: 12, color: C.muted, marginLeft: 8 }}>
+              {monthTxns.filter(t => t.type === "expense").length} transactions · {bills.length} bills
+              {filterCat !== "All" && <span style={{ color: C.accent }}> · filtered: {filterCat}</span>}
+            </span>
+          </div>
+          <span style={{ color: C.muted, fontSize: 18, transform: txOpen ? "rotate(90deg)" : "none", transition: "transform 0.2s", display: "inline-block" }}>›</span>
+        </button>
+
+        {txOpen && (
+          <div style={{ borderTop: `1px solid ${C.border}`, padding: "16px 20px 20px" }}>
+            {/* ── Filters ── */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, alignItems: "center" }}>
+              {/* Type toggle */}
+              <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 3, gap: 2, flexShrink: 0 }}>
+                {[["all","All"],["transaction","Transactions"],["bill","Bills"]].map(([v, label]) => (
+                  <button key={v} onClick={() => setFilterType(v)}
+                    style={{ padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, background: filterType === v ? C.accent : "transparent", color: filterType === v ? "#000" : C.muted }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {/* Category */}
+              <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
+                style={{ fontSize: 11, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer" }}>
+                <option value="All">All categories</option>
+                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              {/* Amount range */}
+              <input value={filterAmtMin} onChange={e => setFilterAmtMin(e.target.value)} placeholder="Min Ft"
+                style={{ width: 72, fontSize: 11, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text }} type="number" />
+              <input value={filterAmtMax} onChange={e => setFilterAmtMax(e.target.value)} placeholder="Max Ft"
+                style={{ width: 72, fontSize: 11, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text }} type="number" />
+              {/* Sort */}
+              <select value={filterSort} onChange={e => setFilterSort(e.target.value)}
+                style={{ fontSize: 11, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer" }}>
+                <option value="date_desc">Date ↓</option>
+                <option value="date_asc">Date ↑</option>
+                <option value="amt_desc">Amount ↓</option>
+                <option value="amt_asc">Amount ↑</option>
+              </select>
+              {/* Clear */}
+              {(filterCat !== "All" || filterAmtMin || filterAmtMax || filterType !== "all") && (
+                <button onClick={() => { setFilterCat("All"); setFilterAmtMin(""); setFilterAmtMax(""); setFilterType("all"); }}
+                  style={{ fontSize: 11, padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceHigh, color: C.muted, cursor: "pointer" }}>
+                  Clear ×
+                </button>
+              )}
+              {/* Add */}
+              {!readonly && (
+                <button onClick={() => setAdding(a => !a)}
+                  style={{ fontSize: 11, padding: "5px 14px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 600, cursor: "pointer", marginLeft: "auto" }}>
+                  {adding ? "Cancel" : "+ Add"}
+                </button>
+              )}
+            </div>
+
+            {/* ── Add form ── */}
+            {adding && !readonly && (
+              <div style={{ background: C.surfaceHigh, borderRadius: 10, padding: 14, marginBottom: 14 }}>
+                <div style={{ display: "flex", gap: 4, marginBottom: 12, background: C.bg, borderRadius: 8, padding: 3, width: "fit-content" }}>
+                  {[["transaction","Transaction"],["bill","Bill / Recurring"]].map(([v, lbl]) => (
+                    <button key={v} onClick={() => setAddTarget(v)}
+                      style={{ padding: "4px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, background: addTarget === v ? C.accent : "transparent", color: addTarget === v ? "#000" : C.muted }}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+                {addTarget === "transaction" ? (
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 8 }}>
+                    <Inp value={txForm.date} onChange={v => setTxForm(f => ({ ...f, date: v }))} placeholder="Date" type="date" />
+                    <Inp value={txForm.desc} onChange={v => setTxForm(f => ({ ...f, desc: v }))} placeholder="Description" />
+                    <Inp value={txForm.amount} onChange={v => setTxForm(f => ({ ...f, amount: v }))} placeholder="Amount" type="number" />
+                    <Sel value={txForm.currency} onChange={v => setTxForm(f => ({ ...f, currency: v }))} options={["HUF","EUR","USD"]} />
+                    <Sel value={txForm.category} onChange={v => setTxForm(f => ({ ...f, category: v }))} options={allCategories(data)} />
+                    <Sel value={txForm.type} onChange={v => setTxForm(f => ({ ...f, type: v }))} options={["expense","income"]} />
+                    <Inp value={txForm.account} onChange={v => setTxForm(f => ({ ...f, account: v }))} placeholder="Account" />
+                    <Btn onClick={addTransaction} style={{ gridColumn: isMobile ? "span 2" : "span 4" }}>Save transaction</Btn>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 8 }}>
+                    <Inp value={billForm.name} onChange={v => setBillForm(f => ({ ...f, name: v }))} placeholder="Name" />
+                    <Sel value={billForm.category} onChange={v => setBillForm(f => ({ ...f, category: v }))} options={allCategories(data)} />
+                    <Inp value={billForm.amount} onChange={v => setBillForm(f => ({ ...f, amount: v }))} placeholder="Amount" type="number" />
+                    <Sel value={billForm.currency} onChange={v => setBillForm(f => ({ ...f, currency: v }))} options={["HUF","EUR","USD"]} />
+                    <Sel value={billForm.type} onChange={v => setBillForm(f => ({ ...f, type: v }))} options={["recurring","onetime"]} />
+                    <Sel value={billForm.frequency} onChange={v => setBillForm(f => ({ ...f, frequency: v }))} options={["monthly","quarterly","annual"]} />
+                    <Sel value={billForm.owner} onChange={v => setBillForm(f => ({ ...f, owner: v }))} options={["Joint","You","Wife"]} />
+                    <Inp value={billForm.nextDue} onChange={v => setBillForm(f => ({ ...f, nextDue: v }))} placeholder="Next due" type="date" />
+                    <Btn onClick={addBill} style={{ gridColumn: isMobile ? "span 2" : "span 4" }}>Save bill</Btn>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Filtered list ── */}
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
+              Showing {filteredItems.length} of {monthTxns.filter(t => t.type === "expense").length + bills.length} items
+            </div>
+            {filteredItems.length === 0 && (
+              <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "20px 0" }}>No items match your filters.</div>
+            )}
+            {filteredItems.map(item => {
+              if (item._kind === "bill") {
+                const b = data.costs.find(c => c.id === item.id);
+                if (!b) return null;
+                return (
+                  <div key={b.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flex: 1, minWidth: 0, flexWrap: "wrap" }}>
+                      <select value={b.category} disabled={readonly}
+                        onChange={e => setData(d => ({ ...d, costs: d.costs.map(x => x.id === b.id ? { ...x, category: e.target.value } : x) }))}
+                        style={{ background: C.blue + "22", color: C.blue, border: "none", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: readonly ? "default" : "pointer", outline: "none", flexShrink: 0 }}>
+                        {allCategories(data).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                      </select>
+                      <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.name}</span>
+                      <span style={{ fontSize: 11, color: C.muted, flexShrink: 0 }}>{b.frequency}</span>
+                      {!readonly && (
+                        <button onClick={() => setData(d => ({ ...d, costs: d.costs.map(x => x.id === b.id ? { ...x, type: x.type === "recurring" ? "onetime" : "recurring" } : x) }))}
+                          style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5, border: `1px solid ${C.border}`, background: b.type === "recurring" ? C.blue + "22" : C.surfaceHigh, color: b.type === "recurring" ? C.blue : C.muted, cursor: "pointer", flexShrink: 0, fontWeight: 600 }}>
+                          {b.type === "recurring" ? "↺ Recurring" : "① One-time"}
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                      <span style={{ color: C.red, fontWeight: 600 }}>−{fmtHUF(toHUF(b.amount, b.currency))}</span>
+                      {!readonly && <Btn variant="danger" onClick={() => setData(d => ({ ...d, costs: d.costs.filter(x => x.id !== b.id) }))} style={{ padding: "4px 10px" }}>×</Btn>}
+                    </div>
+                  </div>
+                );
+              }
+              return <EditableTxnRow key={item.id} t={item} readonly={readonly} setData={setData} data={data} />;
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* ── Goals ── */}
+      <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12 }}>Goals</div>
+        <SavingsGoals data={data} setData={setData} readonly={readonly} />
+        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 14, marginTop: 16 }}>
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 2 }}>Budget Targets</div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Set monthly limits per expense category and track actual spend</div>
+          <BudgetSection data={data} setData={setData} readonly={readonly} viewMonth={viewMonth} isAvg={false} allMonths={allMonths} />
+        </div>
+        {!readonly && <ManageCategories data={data} setData={setData} />}
+      </div>
+    </div>
+  );
+}
+
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -4315,37 +4876,44 @@ function AppInner() {
   const [session, setSession] = useState(null);
   const [isDemo, setIsDemo] = useState(false);
   const [authReady, setAuthReady] = useState(false);
-  const [tab, setTab] = useState("costs");
+  const [tab, setTab] = useState("expenses");
   const [chatOpen, setChatOpen] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [sweepOpen, setSweepOpen] = useState(false);
   const [sweepDismissed, setSweepDismissed] = useState(false);
-  const [pendingImport, setPendingImport] = useState(null); // { name, text, fileType }
-  const [pendingChatMessage, setPendingChatMessage] = useState(null); // pre-fill message from quick-start tile
-  const [pendingFileOpen, setPendingFileOpen] = useState(false); // trigger file input from quick-start tile
+  const [pendingImport, setPendingImport] = useState(null);
+  const [pendingChatMessage, setPendingChatMessage] = useState(null);
+  const [pendingFileOpen, setPendingFileOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
-  // GDPR
-  const [consentGiven, setConsentGiven]           = useState(false);
   const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   Object.assign(C, darkMode ? DARK_C : LIGHT_C);
+
+  // Global month picker
+  const _now = new Date();
+  const _thisMonth = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}`;
+  const [viewMonth, setViewMonth] = useState(_thisMonth);
+  const [_vy, _vm] = viewMonth.split("-").map(Number);
+  const viewMonthLabel = new Date(_vy, _vm - 1, 1).toLocaleString("en-GB", { month: "short", year: "numeric" });
+  function shiftViewMonth(delta) {
+    const d = new Date(_vy, _vm - 1 + delta, 1);
+    const nm = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    if (nm <= _thisMonth) setViewMonth(nm);
+  }
 
   function handleImport(file, fileType) {
     setPendingImport({ ...file, fileType });
     setChatOpen(true);
   }
-
-  // Called by quick-start tiles with an optional pre-filled message
   function handleOpenChat(message) {
     if (message) setPendingChatMessage(message);
     setChatOpen(true);
   }
-
-  // Called by quick-start upload tiles
   function handleOpenUpload() {
     setPendingFileOpen(true);
     setChatOpen(true);
   }
+
   const [data, setDataRaw] = useState(EMPTY_DATA);
   const [householdId, setHouseholdId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -4363,34 +4931,28 @@ function AppInner() {
     if (isDemo) {
       setHouseholdId(DEMO_ID);
       setDataRaw(normalizeData(DEMO_DATA));
-      setConsentGiven(true); // demo skips consent gate
+      setConsentGiven(true);
     } else if (session?.user) {
-      // GDPR: check if this user has previously accepted the privacy policy
       try {
         const stored = localStorage.getItem(`${GDPR_CONSENT_KEY}_${session.user.id}`);
         setConsentGiven(!!stored);
-      } catch (e) {
-        setConsentGiven(true); // localStorage unavailable — don't block access
-      }
+      } catch (e) { setConsentGiven(true); }
       loadOrCreateHousehold(session.user.id);
     }
   }, [session, isDemo, authReady]);
 
-  // GDPR Art. 17 — right to erasure
-  // Deletes all financial data from Supabase then signs out.
-  // Note: Supabase auth record (email only) requires admin API; purged within 7 days or on request.
+  const [consentGiven, setConsentGiven] = useState(false);
+
   async function deleteAccount() {
     if (!session?.user) return;
     await supabase.from("households").delete().eq("user_id", session.user.id);
     await signOut();
   }
-
-  // GDPR Art. 20 — right to data portability
   function exportData() {
     const payload = { exported_at: new Date().toISOString(), version: "1.0", data };
     const json = JSON.stringify(payload, null, 2);
     const blob = new Blob([json], { type: "application/json" });
-    const url  = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = `pfa_export_${todayStr()}.json`;
     document.body.appendChild(a); a.click();
@@ -4414,10 +4976,7 @@ function AppInner() {
     setSaveError(false);
     const t = setTimeout(async () => {
       const { error } = await supabase.from("households").update({ data, updated_at: new Date().toISOString() }).eq("id", householdId);
-      if (error) {
-        console.error("Save failed:", error);
-        setSaveError(true);
-      }
+      if (error) { console.error("Save failed:", error); setSaveError(true); }
       setSaving(false);
     }, 1000);
     return () => clearTimeout(t);
@@ -4426,7 +4985,6 @@ function AppInner() {
   function setData(updater) { if (isDemo) return; setDataRaw(updater); }
   async function signOut() { await supabase.auth.signOut(); setIsDemo(false); setDataRaw(EMPTY_DATA); setHouseholdId(null); }
 
-  // Auto-snapshot net worth on first load of each month (skip demo)
   useEffect(() => {
     if (!householdId || isDemo) return;
     maybeSnapshotNW(data, setData);
@@ -4437,14 +4995,16 @@ function AppInner() {
   if (!authReady) return <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>Loading…</div>;
   if (!session && !isDemo) return <Auth onLogin={() => setIsDemo(true)} />;
 
+  if (session?.user && !consentGiven) {
+    return <GDPRConsentGate userId={session.user.id} onAccept={() => setConsentGiven(true)} />;
+  }
+
   const tabs = [
-    { id: "costs",    label: "Costs",     icon: "📋" },
-    { id: "cashflow", label: "Cash Flow",  icon: "💸" },
-    { id: "wealth",   label: "Wealth",     icon: "📈" },
+    { id: "expenses", label: "Cash flow & costs", icon: "💸" },
+    { id: "wealth",   label: "Wealth",             icon: "📈" },
   ];
   const readonly = isDemo;
 
-  // Monthly Sweep detection
   const sweepThisMonth = (() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -4462,10 +5022,19 @@ function AppInner() {
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono&display=swap" rel="stylesheet" />
 
       {/* ── Header ── */}
-      <header style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: isMobile ? "0 16px" : "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 50 }}>
-        <div style={{ fontWeight: 700, fontSize: 18, color: C.accent }}>✦ PFA</div>
+      <header style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: isMobile ? "0 12px" : "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 50 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ fontWeight: 700, fontSize: 18, color: C.accent }}>✦ PFA</div>
+          {/* Global month picker */}
+          <div style={{ display: "flex", alignItems: "center", gap: 2, background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "3px 6px" }}>
+            <button onClick={() => shiftViewMonth(-1)} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 15, lineHeight: 1, padding: "0 3px" }}>‹</button>
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", minWidth: isMobile ? 58 : 78, textAlign: "center" }}>{viewMonthLabel}</span>
+            <button onClick={() => shiftViewMonth(1)} disabled={viewMonth >= _thisMonth}
+              style={{ background: "none", border: "none", cursor: viewMonth >= _thisMonth ? "default" : "pointer", color: viewMonth >= _thisMonth ? C.border : C.muted, fontSize: 15, lineHeight: 1, padding: "0 3px" }}>›</button>
+          </div>
+        </div>
 
-        {/* Desktop nav tabs — hidden on mobile */}
+        {/* Desktop nav tabs */}
         {!isMobile && (
           <nav style={{ display: "flex", gap: 4 }}>
             {tabs.map(t => (
@@ -4479,14 +5048,12 @@ function AppInner() {
         <div style={{ display: "flex", gap: isMobile ? 6 : 10, alignItems: "center" }}>
           {saving && !isMobile && <span style={{ fontSize: 11, color: C.muted }}>Saving…</span>}
           {saveError && <span style={{ fontSize: 11, color: C.red, cursor: "pointer" }} onClick={() => setSaveError(false)} title="Data may not have saved — check your connection">⚠{isMobile ? "" : " Save failed"}</span>}
-          {/* Privacy policy link — always visible on desktop */}
           {!isMobile && (
             <button onClick={() => setShowPrivacyPolicy(true)}
               style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 11, padding: "0 2px", textDecoration: "underline" }}>
               Privacy
             </button>
           )}
-          {/* Account & Privacy settings — authenticated users only */}
           {!readonly && (
             <button onClick={() => setShowAccountSettings(true)} title="Account & Privacy Settings"
               style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 14, color: C.muted, lineHeight: 1 }}>
@@ -4503,6 +5070,12 @@ function AppInner() {
           {readonly && !isMobile && <Tag color={C.orange}>Demo</Tag>}
         </div>
       </header>
+
+      {/* ── Modals ── */}
+      {showPrivacyPolicy && <PrivacyPolicyModal onClose={() => setShowPrivacyPolicy(false)} />}
+      {showAccountSettings && !readonly && (
+        <AccountSettingsModal onClose={() => setShowAccountSettings(false)} onExport={exportData} onDeleteRequest={deleteAccount} userEmail={session?.user?.email} onShowPrivacy={() => { setShowAccountSettings(false); setShowPrivacyPolicy(true); }} />
+      )}
 
       {/* ── Load error banner ── */}
       {loadError && (
@@ -4526,19 +5099,17 @@ function AppInner() {
         </div>
       )}
 
-      {/* ── Monthly Sweep modal ── */}
       {sweepOpen && !readonly && (
         <MonthlySweep data={data} setData={setData} onClose={() => setSweepOpen(false)} thisMonth={sweepThisMonth} />
       )}
 
       {/* ── Main content ── */}
       <main style={{ padding: isMobile ? "16px 12px" : "24px clamp(16px, 2vw, 32px)", maxWidth: "min(2400px, 98vw)", margin: "0 auto", width: "100%", boxSizing: "border-box", paddingBottom: isMobile ? 80 : undefined }}>
-        {tab === "costs" && <Costs data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
-        {tab === "cashflow" && <CashFlow data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
+        {tab === "expenses" && <CashFlowExpenses data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} viewMonth={viewMonth} />}
         {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
       </main>
 
-      {/* ── Bottom tab bar (mobile only) ── */}
+      {/* ── Bottom tab bar (mobile) ── */}
       {isMobile && (
         <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 64, background: C.surface, borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", zIndex: 60 }}>
           {tabs.map(t => (
@@ -4552,18 +5123,24 @@ function AppInner() {
         </nav>
       )}
 
-      {/* ── Quick Add FAB (bottom-left, mirrors AI chat FAB) ── */}
+      {/* ── Quick Add FAB ── */}
       {!readonly && (
         <button onClick={() => setQuickAddOpen(true)} title="Quick Add"
-          style={{
-            position: "fixed",
-            bottom: isMobile ? 72 : 28,
-            left: 28,
-            width: 52, height: 52, borderRadius: "50%",
-            background: C.surfaceHigh, border: `1.5px solid ${C.border}`,
-            cursor: "pointer", fontSize: 22, color: C.text, fontWeight: 700,
-            boxShadow: "0 4px 20px rgba(0,0,0,0.4)", zIndex: 100,
-            display: "flex", alignItems: "center", justifyContent: "center",
+          style={{ position: "fixed", bottom: isMobile ? 72 : 28, left: 28, width: 52, height: 52, borderRadius: "50%", background: C.surfaceHigh, border: `1.5px solid ${C.border}`, cursor: "pointer", fontSize: 22, color: C.text, fontWeight: 700, boxShadow: "0 4px 20px rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+      )}
+      {quickAddOpen && !readonly && (
+        <QuickAdd setData={setData} onClose={() => setQuickAddOpen(false)} isMobile={isMobile} />
+      )}
+
+      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} initialMessage={pendingChatMessage} clearInitialMessage={() => setPendingChatMessage(null)} triggerFileOpen={pendingFileOpen} clearTriggerFileOpen={() => setPendingFileOpen(false)} onShowPrivacy={() => setShowPrivacyPolicy(true)} />
+    </div>
+  );
+}
+
+export default function App() {
+  return <ErrorBoundary><AppInner /></ErrorBoundary>;
+}
+ntent: "center",
           }}>+</button>
       )}
 
