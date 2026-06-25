@@ -5133,22 +5133,6 @@ function AppInner() {
       )}
 
       <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} initialMessage={pendingChatMessage} clearInitialMessage={() => setPendingChatMessage(null)} triggerFileOpen={pendingFileOpen} clearTriggerFileOpen={() => setPendingFileOpen(false)} onShowPrivacy={() => setShowPrivacyPolicy(true)} />
-    </div>
-  );
-}
-
-export default function App() {
-  return <ErrorBoundary><AppInner /></ErrorBoundary>;
-}
-ntent: "center",
-          }}>+</button>
-      )}
-
-      {quickAddOpen && !readonly && (
-        <QuickAdd setData={setData} onClose={() => setQuickAddOpen(false)} isMobile={isMobile} />
-      )}
-
-      <AIChat data={data} setData={setData} open={chatOpen} setOpen={setChatOpen} readonly={readonly} pendingImport={pendingImport} clearPendingImport={() => setPendingImport(null)} isMobile={isMobile} initialMessage={pendingChatMessage} clearInitialMessage={() => setPendingChatMessage(null)} triggerFileOpen={pendingFileOpen} clearTriggerFileOpen={() => setPendingFileOpen(false)} onShowPrivacy={() => setShowPrivacyPolicy(true)} />
 
       {/* ── GDPR: Consent gate — shown once per user on first login ── */}
       {!isDemo && session?.user && !consentGiven && (
