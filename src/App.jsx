@@ -4,7 +4,7 @@ import {
   BarChart, Bar, PieChart, Pie, Cell,
   AreaChart, Area,
   ComposedChart, Line,
-  XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, ReferenceLine
+  XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, ReferenceLine, LabelList
 } from "recharts";
 
 // ─── Supabase ─────────────────────────────────────────────────────────────────
@@ -21,12 +21,12 @@ const USD_HUF = 310;
 const DARK_C = {
   bg: "#0f0f11", surface: "#18181c", surfaceHigh: "#222228", border: "#2a2a32",
   accent: "#e8c547", red: "#f05a5a", green: "#4fc98a", blue: "#5a9cf0",
-  purple: "#a07cf0", orange: "#f09a5a", muted: "#6b6b7e", text: "#e8e8f0", textSoft: "#a0a0b8",
+  purple: "#a07cf0", orange: "#f09a5a", muted: "#9898bc", text: "#e8e8f0", textSoft: "#b8b8d0",
 };
 const LIGHT_C = {
   bg: "#f2f3f7", surface: "#ffffff", surfaceHigh: "#e8eaf2", border: "#d0d4e8",
   accent: "#b8950a", red: "#c93030", green: "#2a8a55", blue: "#2a5cb5",
-  purple: "#6030b0", orange: "#c06010", muted: "#7878a0", text: "#13131e", textSoft: "#44446a",
+  purple: "#6030b0", orange: "#c06010", muted: "#404070", text: "#13131e", textSoft: "#38386a",
 };
 let C = { ...DARK_C };
 
@@ -1177,15 +1177,7 @@ function Costs({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) 
       )}
 
       {/* ── Budget section ── */}
-      <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 2 }}>
-          {isAvg ? "Average Monthly Budget" : "Monthly Budget"}
-        </div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
-          {isAvg ? `Average spend across ${allMonths.length} months · fixed recurring auto-detected` : "Actual spend from transactions · fixed recurring auto-detected · Utilities estimated from history"}
-        </div>
-        <BudgetSection data={data} setData={setData} readonly={readonly} viewMonth={viewMonth} isAvg={isAvg} allMonths={allMonths} />
-      </div>
+      <BudgetSection data={data} setData={setData} readonly={readonly} viewMonth={viewMonth} isAvg={isAvg} allMonths={allMonths} />
 
       {/* ── Manage Categories ── */}
       {!readonly && <ManageCategories data={data} setData={setData} />}
@@ -1523,7 +1515,8 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
     return Object.keys(dayTotals).sort().map(day => {
       cum += dayTotals[day];
       const cn = Math.round(cum);
-      return { day: `${parseInt(day)}`, cumNet: cn, cumPos: cn >= 0 ? cn : 0, cumNeg: cn < 0 ? cn : 0 };
+      const label = new Date(`${viewMonth}-${day}`).toLocaleDateString("en-GB", { month: "short", day: "numeric" });
+      return { day: label, cumNet: cn, cumPos: cn >= 0 ? cn : 0, cumNeg: cn < 0 ? cn : 0 };
     });
   })();
 
@@ -1629,12 +1622,13 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
         <Card>
           <div style={{ fontWeight: 600, marginBottom: 2 }}>Expense Breakdown</div>
           <ResponsiveContainer width="100%" height={Math.max(160, byCategory.length * 36)}>
-            <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 16 }}>
-              <XAxis type="number" tick={{ fill: C.text, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
+            <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 72 }}>
+              <XAxis type="number" tick={false} axisLine={false} tickLine={false} />
               <YAxis type="category" dataKey="name" tick={{ fill: C.text, fontSize: 11 }} width={96} axisLine={false} tickLine={false} interval={0} />
-              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} cursor={{ fill: C.surfaceHigh }} />
               <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                 {byCategory.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                <LabelList dataKey="value" position="right" formatter={v => v >= 1000 ? `${Math.round(v / 1000)}k` : String(Math.round(v))} style={{ fill: C.text, fontSize: 11, fontWeight: 600 }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -1682,7 +1676,7 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
                   <stop offset="5%" stopColor={C.red} stopOpacity={0.5} /><stop offset="95%" stopColor={C.red} stopOpacity={0.05} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
               <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
               <Tooltip formatter={(v, name) => name === "Net" ? [fmtHUF(v), "Cumulative net"] : null}
                 contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
@@ -1766,6 +1760,7 @@ function SavingsGoals({ data, setData, readonly }) {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [calcGoalId, setCalcGoalId] = useState(null);
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
@@ -1816,14 +1811,22 @@ function SavingsGoals({ data, setData, readonly }) {
 
   return (
     <Card style={{ marginTop: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 600 }}>Savings Goals</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+        <div style={{ fontWeight: 700, fontSize: 15 }}>Savings Goals</div>
         {!readonly && (
           <Btn variant="ghost" onClick={() => { setAdding(!adding); setEditingId(null); setForm(EMPTY_FORM); }} style={{ fontSize: 12 }}>
             {adding ? "Cancel" : "+ Add goal"}
           </Btn>
         )}
       </div>
+      {goals.some(g => !g.monthlyContribution || toHUF(g.monthlyContribution, g.currency || "HUF") === 0) && (
+        <div style={{ fontSize: 12, color: C.accent, fontWeight: 500, marginBottom: 14, background: C.accent + "15", border: `1px solid ${C.accent}33`, borderRadius: 7, padding: "7px 12px" }}>
+          💡 Some goals are missing a monthly contribution. Use the calculator on each goal to set one and see your estimated completion date.
+        </div>
+      )}
+      {!goals.some(g => !g.monthlyContribution || toHUF(g.monthlyContribution, g.currency || "HUF") === 0) && goals.length > 0 && (
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>Track progress toward your financial targets — use the calculator to adjust monthly contributions.</div>
+      )}
 
       {/* Add / edit form */}
       {adding && !readonly && (
@@ -1942,17 +1945,36 @@ function SavingsGoals({ data, setData, readonly }) {
 
               {/* Estimate row + quick-update */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <div style={{ fontSize: 12, color: C.muted }}>
+                <div style={{ fontSize: 12, color: done ? C.green : C.muted }}>
                   {done ? "🎉 Goal reached!" :
-                    !contribution ? "Set a monthly contribution to see your estimate" :
                     estDate ? `✦ At ${fmtHUF(contribution)}/month → ~${estDate} (${estMonths} month${estMonths !== 1 ? "s" : ""})` :
                     "Already reached"
                   }
                 </div>
-                {!readonly && !done && (
-                  <QuickUpdateAmount goalId={g.id} currentAmount={g.currentAmount} currency={g.currency || "HUF"} onUpdate={updateCurrent} />
-                )}
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {!readonly && !done && (
+                    <button onClick={() => setCalcGoalId(calcGoalId === g.id ? null : g.id)}
+                      style={{ background: calcGoalId === g.id ? C.accent + "22" : C.surfaceHigh, border: `1px solid ${calcGoalId === g.id ? C.accent : C.border}`, borderRadius: 7, padding: "4px 10px", color: calcGoalId === g.id ? C.accent : C.muted, fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
+                      🧮 Calculator
+                    </button>
+                  )}
+                  {!readonly && !done && (
+                    <QuickUpdateAmount goalId={g.id} currentAmount={g.currentAmount} currency={g.currency || "HUF"} onUpdate={updateCurrent} />
+                  )}
+                </div>
               </div>
+
+              {/* Goal contribution calculator */}
+              {calcGoalId === g.id && !done && (
+                <GoalContributionCalc
+                  goal={g}
+                  onSet={contrib => {
+                    setData(d => ({ ...d, savingsGoals: d.savingsGoals.map(x => x.id === g.id ? { ...x, monthlyContribution: contrib } : x) }));
+                    setCalcGoalId(null);
+                  }}
+                  onClose={() => setCalcGoalId(null)}
+                />
+              )}
             </div>
           );
         })}
@@ -1981,6 +2003,99 @@ function QuickUpdateAmount({ goalId, currentAmount, currency, onUpdate }) {
         style={{ background: C.green, border: "none", borderRadius: 6, padding: "4px 9px", color: "#000", fontSize: 11, cursor: "pointer", fontWeight: 700 }}>✓</button>
       <button onClick={() => setEditing(false)}
         style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
+    </div>
+  );
+}
+
+// ─── Goal Contribution Calculator ────────────────────────────────────────────
+function GoalContributionCalc({ goal, onSet, onClose }) {
+  const target = toHUF(goal.targetAmount, goal.currency || "HUF");
+  const current = toHUF(goal.currentAmount, goal.currency || "HUF");
+  const remaining = Math.max(0, target - current);
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+
+  // Two modes: by contribution amount (slider) OR by target date
+  const [mode, setMode] = useState("contribution"); // "contribution" | "date"
+
+  // Mode 1: slider for monthly contribution → show estimated date
+  const minC = Math.max(1000, Math.round(remaining / 120)); // min: 1k or enough for 10y
+  const maxC = Math.round(remaining); // max: one-shot
+  const [sliderVal, setSliderVal] = useState(() => {
+    if (goal.monthlyContribution) return toHUF(goal.monthlyContribution, goal.currency || "HUF");
+    return Math.round(remaining / 12); // default: 1 year
+  });
+
+  // Mode 2: target date → show required monthly contribution
+  const defaultTarget = new Date(today.getFullYear(), today.getMonth() + 12, 1).toISOString().slice(0, 7);
+  const [targetMonth, setTargetMonth] = useState(goal.targetDate ? goal.targetDate.slice(0, 7) : defaultTarget);
+
+  const estMonths = sliderVal > 0 ? Math.ceil(remaining / sliderVal) : null;
+  const estDate = estMonths !== null ? new Date(today.getFullYear(), today.getMonth() + estMonths, 1).toLocaleString("en-GB", { month: "long", year: "numeric" }) : null;
+
+  const targetDateObj = new Date(targetMonth + "-01"); targetDateObj.setHours(0, 0, 0, 0);
+  const monthsToTarget = Math.max(1, Math.round((targetDateObj - today) / (30.44 * 86400000)));
+  const requiredContrib = remaining > 0 ? Math.ceil(remaining / monthsToTarget) : 0;
+
+  const displayContrib = mode === "contribution" ? sliderVal : requiredContrib;
+
+  return (
+    <div style={{ background: C.surfaceHigh, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: 16, marginTop: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontWeight: 600, fontSize: 13, color: C.text }}>Contribution Calculator</div>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+      </div>
+
+      {/* Mode toggle */}
+      <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 3, gap: 2, marginBottom: 14, width: "fit-content" }}>
+        {[["contribution","Set contribution"],["date","Set target date"]].map(([v, lbl]) => (
+          <button key={v} onClick={() => setMode(v)}
+            style={{ padding: "5px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600,
+              background: mode === v ? C.accent : "transparent", color: mode === v ? "#000" : C.muted }}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {mode === "contribution" ? (
+        <div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
+            Monthly contribution — drag to explore scenarios
+          </div>
+          <input type="range" min={minC} max={maxC} step={Math.max(1000, Math.round((maxC - minC) / 100))}
+            value={sliderVal} onChange={e => setSliderVal(Number(e.target.value))}
+            style={{ width: "100%", accentColor: C.accent, marginBottom: 10 }} />
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, color: C.muted }}>{fmtHUF(minC)}/mo</span>
+            <span style={{ fontWeight: 700, fontSize: 14, color: C.accent }}>{fmtHUF(sliderVal)}/month</span>
+            <span style={{ fontSize: 12, color: C.muted }}>{fmtHUF(maxC)}/mo</span>
+          </div>
+          <div style={{ background: C.bg, borderRadius: 8, padding: "10px 14px", fontSize: 13, color: C.text }}>
+            {estMonths !== null ? (
+              <>✦ You'd reach your goal in <strong style={{ color: C.green }}>{estMonths} month{estMonths !== 1 ? "s" : ""}</strong> — by <strong style={{ color: C.accent }}>{estDate}</strong></>
+            ) : "Set a contribution above"}
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Pick your target month</div>
+          <input type="month" value={targetMonth} min={new Date(today.getFullYear(), today.getMonth() + 1, 1).toISOString().slice(0, 7)}
+            onChange={e => setTargetMonth(e.target.value)}
+            style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 10px", color: C.text, fontSize: 13, outline: "none", marginBottom: 10, width: "100%" }} />
+          <div style={{ background: C.bg, borderRadius: 8, padding: "10px 14px", fontSize: 13, color: C.text }}>
+            {requiredContrib > 0 ? (
+              <>✦ To reach your goal by <strong style={{ color: C.accent }}>{new Date(targetMonth + "-01").toLocaleString("en-GB", { month: "long", year: "numeric" })}</strong> you need <strong style={{ color: C.green }}>{fmtHUF(requiredContrib)}/month</strong> ({monthsToTarget} months)</>
+            ) : "Goal already reached!"}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <Btn onClick={() => onSet(Math.round(displayContrib / (goal.currency === "EUR" ? EUR_HUF : goal.currency === "USD" ? USD_HUF : 1)))} style={{ flex: 1 }}>
+          Set {fmtHUF(displayContrib)}/month
+        </Btn>
+        <button onClick={onClose} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: "none", color: C.muted, cursor: "pointer", fontSize: 13 }}>Cancel</button>
+      </div>
     </div>
   );
 }
@@ -3379,6 +3494,18 @@ function BudgetSection({ data, setData, readonly, viewMonth, isAvg, allMonths })
 
   return (
     <div style={{ display: "grid", gap: 16, marginTop: 8 }}>
+      {/* Section header */}
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Budget Targets</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+              {isAvg ? `Average spend across ${(allMonths || []).length} months · fixed recurring auto-detected` : "Monthly limits per category — track actual vs target"}
+            </div>
+          </div>
+        </div>
+      </Card>
+
       {/* Summary stats — month picker is in Costs tab, shared */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
         <Card><Stat label={isAvg ? "Avg Spent vs Budgeted" : "Spent vs Budgeted"} value={`${fmtHUF(totalSpent)} / ${fmtHUF(totalBudgeted)}`} color={totalSpent > totalBudgeted ? C.red : C.text} /></Card>
@@ -4524,7 +4651,8 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
     return Object.keys(dayTotals).sort().map(day => {
       cum += dayTotals[day];
       const cn = Math.round(cum);
-      return { day: `${parseInt(day)}`, cumNet: cn, cumPos: cn >= 0 ? cn : 0, cumNeg: cn < 0 ? cn : 0 };
+      const label = new Date(`${viewMonth}-${day}`).toLocaleDateString("en-GB", { month: "short", day: "numeric" });
+      return { day: label, cumNet: cn, cumPos: cn >= 0 ? cn : 0, cumNeg: cn < 0 ? cn : 0 };
     });
   })();
 
@@ -4645,7 +4773,7 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
                   <stop offset="5%" stopColor={C.red} stopOpacity={0.5} /><stop offset="95%" stopColor={C.red} stopOpacity={0.05} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
               <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
               <Tooltip formatter={(v, name) => name === "Net" ? [fmtHUF(v), "Cumulative net"] : null}
                 contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
@@ -4670,8 +4798,8 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
             )}
           </div>
           <ResponsiveContainer width="100%" height={Math.max(140, byCategory.length * 34)}>
-            <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 16 }}>
-              <XAxis type="number" tick={{ fill: C.text, fontSize: 10 }} tickFormatter={v => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} />
+            <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 72 }}>
+              <XAxis type="number" tick={false} axisLine={false} tickLine={false} />
               <YAxis type="category" dataKey="name" tick={{ fill: C.text, fontSize: 11 }} width={96} axisLine={false} tickLine={false} interval={0} />
               <Tooltip formatter={v => [fmtHUF(v), "Spent"]} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} cursor={{ fill: C.surfaceHigh }} />
               <Bar dataKey="value" radius={[0, 4, 4, 0]} style={{ cursor: "pointer" }}
@@ -4680,6 +4808,7 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
                   <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]}
                     opacity={filterCat === "All" || filterCat === entry.name ? 1 : 0.35} />
                 ))}
+                <LabelList dataKey="value" position="right" formatter={v => v >= 1000 ? `${Math.round(v / 1000)}k` : String(Math.round(v))} style={{ fill: C.text, fontSize: 11, fontWeight: 600 }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -4688,18 +4817,18 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
       )}
 
       {/* ── Browse transactions & costs ── */}
-      <Card style={{ padding: 0, overflow: "hidden" }}>
+      <Card style={{ padding: 0, overflow: "hidden", border: `1px solid ${txOpen ? C.accent + "55" : C.border}` }}>
         <button onClick={() => setTxOpen(o => !o)}
-          style={{ width: "100%", padding: "14px 20px", display: "flex", alignItems: "center", gap: 10, background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
-          <span style={{ fontSize: 16 }}>📋</span>
+          style={{ width: "100%", padding: "16px 20px", display: "flex", alignItems: "center", gap: 12, background: txOpen ? C.accent + "0d" : "transparent", border: "none", cursor: "pointer", textAlign: "left", transition: "background 0.2s" }}>
+          <span style={{ fontSize: 18, lineHeight: 1 }}>📋</span>
           <div style={{ flex: 1 }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>Browse transactions & costs</span>
-            <span style={{ fontSize: 12, color: C.muted, marginLeft: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: C.text }}>Transactions & Costs</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
               {monthTxns.filter(t => t.type === "expense").length} transactions · {bills.length} bills
               {filterCat !== "All" && <span style={{ color: C.accent }}> · filtered: {filterCat}</span>}
-            </span>
+            </div>
           </div>
-          <span style={{ color: C.muted, fontSize: 18, transform: txOpen ? "rotate(90deg)" : "none", transition: "transform 0.2s", display: "inline-block" }}>›</span>
+          <span style={{ color: txOpen ? C.accent : C.muted, fontSize: 20, fontWeight: 700, transform: txOpen ? "rotate(90deg)" : "none", transition: "transform 0.2s, color 0.2s", display: "inline-block" }}>›</span>
         </button>
 
         {txOpen && (
@@ -4829,17 +4958,13 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
         )}
       </Card>
 
-      {/* ── Goals ── */}
-      <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 12 }}>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12 }}>Goals</div>
-        <SavingsGoals data={data} setData={setData} readonly={readonly} />
-        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 14, marginTop: 16 }}>
-          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 2 }}>Budget Targets</div>
-          <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Set monthly limits per expense category and track actual spend</div>
-          <BudgetSection data={data} setData={setData} readonly={readonly} viewMonth={viewMonth} isAvg={false} allMonths={allMonths} />
-        </div>
-        {!readonly && <ManageCategories data={data} setData={setData} />}
-      </div>
+      {/* ── Savings Goals ── */}
+      <SavingsGoals data={data} setData={setData} readonly={readonly} />
+
+      {/* ── Budget Targets ── */}
+      <BudgetSection data={data} setData={setData} readonly={readonly} viewMonth={viewMonth} isAvg={false} allMonths={allMonths} />
+
+      {!readonly && <ManageCategories data={data} setData={setData} />}
     </div>
   );
 }
