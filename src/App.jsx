@@ -40,7 +40,7 @@ function useIsMobile() {
   return m;
 }
 
-const CATEGORIES = ["Housing","Food","Transport","Utilities","Health","Education","Entertainment","Clothing","Garden","Savings","Income","Transfer","Other"];
+const CATEGORIES = ["Housing","Food","Transport","Utilities","Health","Education","Entertainment","Clothing","Garden","Savings","Income","Transfer","Uncategorized","Other"];
 const PIE_COLORS = [C.blue, C.green, C.accent, C.purple, C.orange, C.red, C.muted, C.textSoft, "#e87ca0", "#7acc7a", C.blue, C.orange, C.muted];
 
 function toHUF(amount, currency) {
@@ -150,7 +150,7 @@ function tryParseRevolutCSV(text, learnedRules = {}) {
       else if (/tual|transfer/i.test(txType)) category = isIncome ? 'Income' : 'Transfer';
       else if (/atm|kesz|cash kivét|bankkiol/i.test(d)) category = 'Transfer';
       else if (isIncome) category = 'Income';
-      else category = 'Other';
+      else category = 'Uncategorized';
     }
 
     rows.push({ date, desc, amount, currency, category, type: entryType, account: 'Revolut' });
@@ -238,7 +238,7 @@ function tryParseErsteXLSX(wb, learnedRules = {}) {
       else if (/hornbach|obi|bauhaus|leroy|kerteszet|ikea|kika|jysk|depot|mr bricolage|praktiker|furdo|homedepo/i.test(d)) category = "Garden";
       else if (/revolut|atm|kesz|cash kivét|bankkiol/i.test(d)) category = "Transfer";
       else if (type === "income") category = "Income";
-      else category = "Other";
+      else category = "Uncategorized";
     }
     transactions.push({ date: dateStr, desc, amount: absAmt, currency, category, type, account: "Erste" });
   }
@@ -2828,11 +2828,11 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
       {/* ── Portfolio view toggle — pill tabs ── */}
       <Card style={{ padding: "10px 16px" }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-          {/* "Total" pill */}
+          {/* "Total Portfolio" pill */}
           <button
             onClick={() => setPortfolioView("total")}
             style={{ padding: "5px 16px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: portfolioView === "total" ? C.accent : C.surfaceHigh, color: portfolioView === "total" ? "#000" : C.muted, transition: "background 0.15s, color 0.15s" }}>
-            Total
+            Total Portfolio
           </button>
           {/* One pill per portfolio */}
           {data.portfolios.map(p => {
@@ -3644,8 +3644,9 @@ IMPORT_BATCH:
 {"type":"transactions"|"costs"|"positions","summary":"Human-readable summary e.g. 23 transactions from OTP March statement","items":[...]}
 
 Transaction item shape:
-{"date":"YYYY-MM-DD","desc":"string","amount":number,"currency":"HUF"|"EUR"|"USD","category":"Housing"|"Food"|"Transport"|"Utilities"|"Health"|"Education"|"Entertainment"|"Savings"|"Income"|"Other","type":"expense"|"income","account":"string"}
+{"date":"YYYY-MM-DD","desc":"string","amount":number,"currency":"HUF"|"EUR"|"USD","category":"Housing"|"Food"|"Transport"|"Utilities"|"Health"|"Education"|"Entertainment"|"Clothing"|"Garden"|"Savings"|"Income"|"Transfer"|"Other"|"Uncategorized","type":"expense"|"income","account":"string"}
   - amount is NEGATIVE for expenses, POSITIVE for income
+  - Use "Uncategorized" when you cannot determine the category — the user will be prompted to review. Use "Other" only when you are confident it is genuinely miscellaneous.
   - "yesterday" = ${yesterday}, "today" = ${todayDate}
   - default account = "OTP"
 
@@ -4616,8 +4617,8 @@ function Dashboard({ data, setTab, viewMonth, onOpenChat }) {
   const expectedSpend = totalBudget > 0 ? Math.round(totalBudget * monthFraction) : null;
   const isOverPace = expectedSpend !== null && expenses > expectedSpend;
 
-  // Uncategorized transactions (any month)
-  const uncategorized = (data.transactions || []).filter(t => t.category === "Other" && t.type === "expense");
+  // Uncategorized transactions (any month — "Uncategorized" means AI couldn't classify; "Other" = user confirmed)
+  const uncategorized = (data.transactions || []).filter(t => t.category === "Uncategorized");
 
   // Categories at ≥90% budget
   const overBudget = (data.budgetTargets || []).filter(bt => {
@@ -4721,22 +4722,70 @@ function Dashboard({ data, setTab, viewMonth, onOpenChat }) {
       )}
 
       {/* ── Quick actions ── */}
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${isMobile ? 2 : 4}, 1fr)`, gap: 10 }}>
-        {[
-          { icon: "📎", label: "Import bank CSV", action: () => onOpenChat() },
-          { icon: "💸", label: "Cash flow", action: () => setTab("expenses") },
-          { icon: "📈", label: "Portfolio", action: () => setTab("wealth") },
-          { icon: "✦", label: "Ask AI assistant", action: () => onOpenChat() },
-        ].map(({ icon, label, action }) => (
-          <button key={label} onClick={action}
-            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 8px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, transition: "border-color 0.15s" }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}>
-            <span style={{ fontSize: 20 }}>{icon}</span>
-            <span style={{ fontSize: 11, fontWeight: 600, color: C.textSoft }}>{label}</span>
-          </button>
-        ))}
-      </div>
+      {(() => {
+        const quickActions = [
+          {
+            label: "Import",
+            action: () => onOpenChat(),
+            icon: (
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="4" y="18" width="20" height="3" rx="1.5" fill={C.accent} opacity="0.9"/>
+                <rect x="4" y="22" width="20" height="3" rx="1.5" fill={C.accent} opacity="0.5"/>
+                <path d="M14 4 L14 16 M9 11 L14 16 L19 11" stroke={C.accent} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )
+          },
+          {
+            label: "Cash flow",
+            action: () => setTab("expenses"),
+            icon: (
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="3" y="13" width="22" height="2" rx="1" fill={C.muted} opacity="0.4"/>
+                <path d="M5 13 L11 7 L17 11 L23 5" stroke={C.green} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M5 13 L11 19 L17 15 L23 21" stroke={C.red} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )
+          },
+          {
+            label: "Portfolio",
+            action: () => setTab("wealth"),
+            icon: (
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="4" y="18" width="5" height="7" rx="1" fill={C.blue} opacity="0.7"/>
+                <rect x="11" y="12" width="5" height="13" rx="1" fill={C.blue} opacity="0.85"/>
+                <rect x="18" y="6" width="5" height="19" rx="1" fill={C.blue}/>
+                <path d="M4 18 L9 14 L14 9 L19 6 L23 4" stroke={C.accent} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.8"/>
+              </svg>
+            )
+          },
+          {
+            label: "AI assistant",
+            action: () => onOpenChat(),
+            icon: (
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="4" y="6" width="20" height="14" rx="3" stroke={C.purple} strokeWidth="2" fill="none"/>
+                <path d="M9 23 L14 18 L19 23" stroke={C.purple} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <circle cx="10" cy="13" r="1.5" fill={C.purple}/>
+                <circle cx="14" cy="13" r="1.5" fill={C.purple}/>
+                <circle cx="18" cy="13" r="1.5" fill={C.purple}/>
+              </svg>
+            )
+          },
+        ];
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${isMobile ? 2 : 4}, 1fr)`, gap: 10 }}>
+            {quickActions.map(({ icon, label, action }) => (
+              <button key={label} onClick={action}
+                style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: isMobile ? "18px 10px" : "22px 12px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 10, transition: "border-color 0.15s, background 0.15s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.background = C.surfaceHigh; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }}>
+                {icon}
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.textSoft }}>{label}</span>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 14 }}>
 
@@ -4824,9 +4873,9 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  // Uncategorized review
+  // Uncategorized review — "Uncategorized" = AI couldn't classify; "Other" = user explicitly chose it
   const [showOtherReview, setShowOtherReview] = useState(true);
-  const otherTxns = data.transactions.filter(t => t.category === "Other" && t.type === "expense");
+  const otherTxns = data.transactions.filter(t => t.category === "Uncategorized");
 
   function reclassify(txId, newCat) {
     const tx = data.transactions.find(t => t.id === txId);
@@ -4938,27 +4987,45 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
       {/* ── Uncategorized review ── */}
       {!readonly && showOtherReview && otherTxns.length > 0 && (
         <Card style={{ borderLeft: `3px solid ${C.orange}`, padding: "12px 16px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
             <div>
               <span style={{ fontWeight: 600, fontSize: 13, color: C.orange }}>⚠ {otherTxns.length} uncategorized transaction{otherTxns.length > 1 ? "s" : ""}</span>
-              <span style={{ fontSize: 12, color: C.muted, marginLeft: 8 }}>— fix them here, they'll be remembered next time</span>
+              <span style={{ fontSize: 12, color: C.muted, marginLeft: 8 }}>— the system couldn't classify these</span>
             </div>
             <button onClick={() => setShowOtherReview(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 16, lineHeight: 1, padding: "0 4px" }}>×</button>
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+            Pick a specific category for each, or use <strong style={{ color: C.text }}>Other</strong> (= miscellaneous) if you don't know a better fit. Rules learned from your choices will be applied automatically next time.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {otherTxns.slice(0, 15).map(t => (
               <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
                 <span style={{ color: C.muted, flexShrink: 0, width: 72 }}>{t.date}</span>
                 <span style={{ flex: 1, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.desc}>{t.desc}</span>
-                <span style={{ color: C.red, flexShrink: 0, fontVariantNumeric: "tabular-nums", width: 80, textAlign: "right" }}>−{Math.abs(t.amount)?.toLocaleString()} {t.currency}</span>
-                <select value="Other" onChange={e => reclassify(t.id, e.target.value)}
+                <span style={{ color: t.type === "income" ? C.green : C.red, flexShrink: 0, fontVariantNumeric: "tabular-nums", width: 80, textAlign: "right" }}>{t.type === "income" ? "+" : "−"}{Math.abs(t.amount)?.toLocaleString()} {t.currency}</span>
+                <select value="Uncategorized" onChange={e => reclassify(t.id, e.target.value)}
                   style={{ fontSize: 11, padding: "2px 4px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer", flexShrink: 0 }}>
-                  <option value="Other" disabled>Categorize…</option>
-                  {allCategories(data).filter(c => c !== "Income").map(c => <option key={c} value={c}>{c}</option>)}
+                  <option value="Uncategorized" disabled>Categorize…</option>
+                  {allCategories(data).filter(c => c !== "Income" && c !== "Uncategorized").map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
             ))}
-            {otherTxns.length > 15 && <div style={{ fontSize: 11, color: C.muted, textAlign: "center", paddingTop: 4 }}>+ {otherTxns.length - 15} more — use "Browse" below to fix the rest</div>}
+            {otherTxns.length > 15 && <div style={{ fontSize: 11, color: C.muted, textAlign: "center", paddingTop: 4 }}>+ {otherTxns.length - 15} more — use "Browse" below to categorize the rest</div>}
+          </div>
+          {/* Bulk "leave as Other" action */}
+          <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>Don't know a better fit for the rest?</span>
+            <button
+              onClick={() => {
+                setData(d => ({
+                  ...d,
+                  transactions: d.transactions.map(t => t.category === "Uncategorized" ? { ...t, category: "Other" } : t)
+                }));
+                setShowOtherReview(false);
+              }}
+              style={{ fontSize: 11, padding: "5px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceHigh, color: C.text, fontWeight: 600, cursor: "pointer" }}>
+              Leave all as Other →
+            </button>
           </div>
         </Card>
       )}
@@ -5070,7 +5137,7 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
             <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 72 }}>
               <XAxis type="number" tick={false} axisLine={false} tickLine={false} />
               <YAxis type="category" dataKey="name" tick={{ fill: C.text, fontSize: 11 }} width={96} axisLine={false} tickLine={false} interval={0} />
-              <Tooltip formatter={v => [fmtHUF(v), "Spent"]} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text }} cursor={{ fill: "transparent" }} />
+              <Tooltip formatter={v => [fmtHUF(v), "Spent"]} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: C.text, fontWeight: 600 }} itemStyle={{ color: C.text }} cursor={{ fill: C.surfaceHigh }} />
               <Bar dataKey="value" radius={[0, 4, 4, 0]} style={{ cursor: "pointer" }}
                 onClick={(entry) => { setFilterCat(entry.name); setTxOpen(true); setFilterType("transaction"); }}>
                 {byCategory.map((entry, i) => (
@@ -5427,7 +5494,7 @@ function AppInner() {
     return <GDPRConsentGate userId={session.user.id} onAccept={() => setConsentGiven(true)} />;
   }
 
-  const uncategorizedCount = (data.transactions || []).filter(t => t.category === "Other" && t.type === "expense").length;
+  const uncategorizedCount = (data.transactions || []).filter(t => t.category === "Uncategorized").length;
   const tabs = [
     { id: "dashboard", label: "Dashboard",         icon: "🏠" },
     { id: "expenses",  label: "Cash flow",         icon: "💸", badge: uncategorizedCount > 0 ? uncategorizedCount : null },
