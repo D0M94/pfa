@@ -932,7 +932,7 @@ function Costs({ data, setData, readonly, onImport, onOpenChat, onOpenUpload }) 
   const totalHUF = billsHUF + displayTxnHUF;
 
   // Pie data — month or average
-  const pieData = CATEGORIES.filter(cat => cat !== "Income").map(cat => {
+  const pieData = allCategories(data).filter(cat => cat !== "Income").map(cat => {
     const fromBills = bills.filter(c => c.category === cat).reduce((s, c) => s + toHUF(c.amount, c.currency), 0);
     const fromTxns = isAvg
       ? (allMonths.length > 0
@@ -1482,7 +1482,7 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
     .sort((a, b) => toHUF(Math.abs(b.amount), b.currency) - toHUF(Math.abs(a.amount), a.currency))
     .slice(0, 10);
 
-  const byCategory = CATEGORIES.filter(c => c !== "Income").map(cat => ({
+  const byCategory = allCategories(data).filter(c => c !== "Income").map(cat => ({
     name: cat,
     value: monthTxns.filter(t => t.category === cat && t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0)
   })).filter(d => d.value > 0);
@@ -1572,7 +1572,7 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
                   style={{ fontSize: 11, padding: "2px 4px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer", flexShrink: 0 }}
                 >
                   <option value="Other" disabled>Categorize…</option>
-                  {CATEGORIES.filter(c => c !== "Income").map(c => <option key={c} value={c}>{c}</option>)}
+                  {allCategories(data).filter(c => c !== "Income").map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
             ))}
@@ -1625,7 +1625,7 @@ function CashFlow({ data, setData, readonly, onImport, onOpenChat, onOpenUpload 
             <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 72 }}>
               <XAxis type="number" tick={false} axisLine={false} tickLine={false} />
               <YAxis type="category" dataKey="name" tick={{ fill: C.text, fontSize: 11 }} width={96} axisLine={false} tickLine={false} interval={0} />
-              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} cursor={{ fill: C.surfaceHigh }} />
+              <Tooltip formatter={v => fmtHUF(v)} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text }} cursor={{ fill: "transparent" }} />
               <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                 {byCategory.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                 <LabelList dataKey="value" position="right" formatter={v => v >= 1000 ? `${Math.round(v / 1000)}k` : String(Math.round(v))} style={{ fill: C.text, fontSize: 11, fontWeight: 600 }} />
@@ -2825,26 +2825,30 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
 
       <FileUploadCard defaultType="investment_export" onFileReady={onImport} readonly={readonly} />
 
-      {/* ── Portfolio view toggle ── */}
-      <Card style={{ padding: "10px 16px", display: "flex", alignItems: "center", gap: 14 }}>
-        <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, flexShrink: 0 }}>Investments:</div>
-        <div style={{ display: "flex", gap: 3, background: C.bg, borderRadius: 8, padding: 3 }}>
-          <button onClick={() => setPortfolioView("total")}
-            style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: portfolioView === "total" ? C.accent : "transparent", color: portfolioView === "total" ? "#000" : C.muted }}>
-            All Portfolios
+      {/* ── Portfolio view toggle — pill tabs ── */}
+      <Card style={{ padding: "10px 16px" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          {/* "Total" pill */}
+          <button
+            onClick={() => setPortfolioView("total")}
+            style={{ padding: "5px 16px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: portfolioView === "total" ? C.accent : C.surfaceHigh, color: portfolioView === "total" ? "#000" : C.muted, transition: "background 0.15s, color 0.15s" }}>
+            Total
           </button>
-          <button onClick={() => setPortfolioView("single")}
-            disabled={data.portfolios.length === 0}
-            style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: data.portfolios.length === 0 ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, background: portfolioView === "single" ? C.accent : "transparent", color: portfolioView === "single" ? "#000" : C.muted, opacity: data.portfolios.length === 0 ? 0.4 : 1 }}>
-            By Portfolio
-          </button>
+          {/* One pill per portfolio */}
+          {data.portfolios.map(p => {
+            const isActive = portfolioView === "single" && selectedPortfolioId === p.id;
+            return (
+              <button key={p.id}
+                onClick={() => { setPortfolioView("single"); setSelectedPortfolioId(p.id); }}
+                style={{ padding: "5px 16px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: isActive ? C.accent : C.surfaceHigh, color: isActive ? "#000" : C.muted, transition: "background 0.15s, color 0.15s" }}>
+                {p.name}{p.broker ? <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>({p.broker})</span> : null}
+              </button>
+            );
+          })}
+          {data.portfolios.length === 0 && (
+            <span style={{ fontSize: 12, color: C.muted, marginLeft: 4 }}>No portfolios yet — add one below</span>
+          )}
         </div>
-        {portfolioView === "single" && data.portfolios.length > 0 && (
-          <select value={selectedPortfolioId || ""} onChange={e => setSelectedPortfolioId(e.target.value)}
-            style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "5px 10px", color: C.text, fontSize: 12, outline: "none" }}>
-            {data.portfolios.map(p => <option key={p.id} value={p.id}>{p.name}{p.broker ? ` (${p.broker})` : ""}</option>)}
-          </select>
-        )}
       </Card>
 
       {/* ══════ TOTAL VIEW ══════ */}
@@ -3206,7 +3210,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
       {portfolioView === "single" && data.portfolios.length === 0 && (
         <Card>
           <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "32px 0" }}>
-            No portfolios yet. Switch to All Portfolios view and add one.
+            No portfolios yet. Use the Wealth section below to add one.
           </div>
         </Card>
       )}
@@ -4585,6 +4589,235 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   );
 }
 
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+function Dashboard({ data, setTab, viewMonth, onOpenChat }) {
+  const isMobile = useIsMobile();
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const dayOfMonth = now.getDate();
+  const monthFraction = viewMonth === thisMonth ? dayOfMonth / daysInMonth : 1;
+
+  const monthTxns = (data.transactions || []).filter(t => t.date?.startsWith(viewMonth));
+  const income = monthTxns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+  const expenses = monthTxns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+  const net = income - expenses;
+  const savingsRate = income > 0 ? Math.round((net / income) * 100) : null;
+
+  const allPositions = (data.portfolios || []).flatMap(p => p.positions || []);
+  const investmentsHUF = allPositions.reduce((s, pos) => s + toHUF((pos.qty || 0) * (pos.currentPrice || 0), pos.currency), 0);
+  const realEstateHUF = (data.realEstate || []).reduce((s, r) => s + toHUF((r.currentValue || 0) - (r.mortgage || 0), r.currency), 0);
+  const cashHUF = (data.cashAccounts || []).reduce((s, a) => s + toHUF(a.balance, a.currency), 0);
+  const totalNW = investmentsHUF + realEstateHUF + cashHUF;
+
+  // Spending pace vs budget targets
+  const totalBudget = (data.budgetTargets || []).reduce((s, bt) => s + toHUF(bt.monthlyLimit, bt.currency || "HUF"), 0);
+  const pacePct = totalBudget > 0 ? Math.round((expenses / totalBudget) * 100) : null;
+  const expectedSpend = totalBudget > 0 ? Math.round(totalBudget * monthFraction) : null;
+  const isOverPace = expectedSpend !== null && expenses > expectedSpend;
+
+  // Uncategorized transactions (any month)
+  const uncategorized = (data.transactions || []).filter(t => t.category === "Other" && t.type === "expense");
+
+  // Categories at ≥90% budget
+  const overBudget = (data.budgetTargets || []).filter(bt => {
+    const spent = monthTxns.filter(t => t.category === bt.category && t.type === "expense")
+      .reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+    return spent >= toHUF(bt.monthlyLimit, bt.currency || "HUF") * 0.9;
+  });
+
+  // Budget bars (top 5 by % used)
+  const budgetBars = (data.budgetTargets || []).map(bt => {
+    const spent = monthTxns.filter(t => t.category === bt.category && t.type === "expense")
+      .reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+    const limit = toHUF(bt.monthlyLimit, bt.currency || "HUF");
+    return { category: bt.category, spent: Math.round(spent), limit: Math.round(limit), pct: limit > 0 ? Math.min(Math.round((spent / limit) * 100), 100) : 0 };
+  }).sort((a, b) => b.pct - a.pct).slice(0, 5);
+
+  // Savings goals (top 3)
+  const goals = (data.savingsGoals || []).slice(0, 3);
+  const goalColors = [C.blue, C.green, C.orange, C.purple];
+
+  // Recent 5 transactions (all time, most recent first)
+  const recentTxns = [...(data.transactions || [])].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 5);
+
+  // Net worth MoM change
+  const nwChange = (() => {
+    const h = data.netWorthHistory || [];
+    if (h.length < 2) return null;
+    return h[h.length - 1].totalNW - h[h.length - 2].totalNW;
+  })();
+
+  const [vy, vm] = viewMonth.split("-").map(Number);
+  const viewMonthLabel = new Date(vy, vm - 1, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
+  const CAT_ICONS = { Housing: "🏠", Food: "🛒", Transport: "🚗", Utilities: "⚡", Health: "💊", Entertainment: "🎬", Clothing: "👔", Education: "📚", Savings: "🏦", Other: "📦", Income: "💵", Garden: "🌿" };
+
+  const isEmpty = (data.transactions || []).length === 0 && allPositions.length === 0;
+  if (isEmpty) return (
+    <div style={{ textAlign: "center", padding: "60px 20px", color: C.muted }}>
+      <div style={{ fontSize: 40, marginBottom: 16 }}>📊</div>
+      <div style={{ fontWeight: 600, fontSize: 16, color: C.text, marginBottom: 8 }}>Your dashboard is empty</div>
+      <div style={{ fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>Import a bank statement or add transactions to see your financial overview here.</div>
+      <Btn onClick={onOpenChat}>Open AI assistant →</Btn>
+    </div>
+  );
+
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+
+      {/* ── Alerts ── */}
+      {uncategorized.length > 0 && (
+        <div style={{ background: C.orange + "18", border: `1px solid ${C.orange}44`, borderRadius: 10, padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 13, color: C.orange }}>
+            ⚠ <strong>{uncategorized.length} transaction{uncategorized.length > 1 ? "s" : ""}</strong> need categorization — affects budget accuracy
+          </div>
+          <button onClick={() => setTab("expenses")} style={{ background: C.orange, border: "none", borderRadius: 7, padding: "5px 14px", color: "#000", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>Review →</button>
+        </div>
+      )}
+      {overBudget.length > 0 && (
+        <div style={{ background: C.red + "18", border: `1px solid ${C.red}44`, borderRadius: 10, padding: "10px 16px", fontSize: 13, color: C.red }}>
+          🔴 <strong>{overBudget.map(b => b.category).join(", ")}</strong> {overBudget.length === 1 ? "is" : "are"} at ≥90% of budget in {viewMonthLabel}
+        </div>
+      )}
+
+      {/* ── KPI tiles ── */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 12 }}>
+        <Card style={{ borderTop: `2px solid ${C.accent}`, cursor: "pointer" }} onClick={() => setTab("wealth")}>
+          <Stat label="Net worth" value={totalNW > 0 ? fmtHUF(totalNW) : "—"} color={C.accent} />
+          {nwChange !== null && <div style={{ textAlign: "center", fontSize: 11, marginTop: 5, color: nwChange >= 0 ? C.green : C.red, fontWeight: 600 }}>{nwChange >= 0 ? "↑" : "↓"} {fmtHUF(Math.abs(nwChange))} MoM</div>}
+        </Card>
+        <Card style={{ borderTop: `2px solid ${net >= 0 ? C.green : C.red}`, cursor: "pointer" }} onClick={() => setTab("expenses")}>
+          <Stat label={`Saved — ${new Date(vy, vm - 1, 1).toLocaleString("en-GB", { month: "short" })}`} value={income > 0 ? `${net >= 0 ? "+" : ""}${fmtHUF(net)}` : "—"} color={net >= 0 ? C.green : C.red} />
+          {savingsRate !== null && <div style={{ textAlign: "center", fontSize: 11, marginTop: 5, color: C.muted }}>{savingsRate}% savings rate</div>}
+        </Card>
+        <Card style={{ borderTop: `2px solid ${isOverPace ? C.red : C.blue}`, cursor: "pointer" }} onClick={() => setTab("expenses")}>
+          <Stat label="Budget pace" value={pacePct !== null ? `${pacePct}%` : expenses > 0 ? fmtHUF(expenses) : "—"} color={pacePct === null ? C.text : pacePct > 100 ? C.red : pacePct > 85 ? C.orange : C.green} />
+          {pacePct !== null && <div style={{ textAlign: "center", fontSize: 11, marginTop: 5, color: C.muted }}>Day {dayOfMonth} of {daysInMonth}</div>}
+        </Card>
+        <Card style={{ borderTop: `2px solid ${C.blue}`, cursor: "pointer" }} onClick={() => setTab("wealth")}>
+          <Stat label="Investments" value={investmentsHUF > 0 ? fmtHUF(investmentsHUF) : "—"} color={C.blue} />
+          {cashHUF > 0 && <div style={{ textAlign: "center", fontSize: 11, marginTop: 5, color: C.muted }}>+ {fmtHUF(cashHUF)} cash</div>}
+        </Card>
+      </div>
+
+      {/* ── Spending pace bar ── */}
+      {pacePct !== null && (
+        <Card style={{ padding: "12px 16px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>Spending pace — {viewMonthLabel}</div>
+            <div style={{ fontSize: 11, color: C.muted }}>{Math.round(monthFraction * 100)}% through month</div>
+          </div>
+          <div style={{ position: "relative", height: 10, background: C.surfaceHigh, borderRadius: 6, overflow: "visible", marginBottom: 6 }}>
+            <div style={{ height: "100%", width: `${Math.min(pacePct, 100)}%`, background: pacePct > 100 ? C.red : pacePct > 90 ? C.orange : pacePct > 70 ? C.accent : C.green, borderRadius: 6 }} />
+            {/* Expected-pace marker */}
+            <div style={{ position: "absolute", top: -3, bottom: -3, left: `${Math.min(Math.round(monthFraction * 100), 100)}%`, width: 2, background: C.muted, borderRadius: 1 }} title="Budget target for today" />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted }}>
+            <span>Spent: <strong style={{ color: isOverPace ? C.red : C.text }}>{fmtHUF(expenses)}</strong></span>
+            <span>On-pace target: {fmtHUF(expectedSpend)}</span>
+            <span>Monthly budget: {fmtHUF(totalBudget)}</span>
+          </div>
+        </Card>
+      )}
+
+      {/* ── Quick actions ── */}
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${isMobile ? 2 : 4}, 1fr)`, gap: 10 }}>
+        {[
+          { icon: "📎", label: "Import bank CSV", action: () => onOpenChat() },
+          { icon: "💸", label: "Cash flow", action: () => setTab("expenses") },
+          { icon: "📈", label: "Portfolio", action: () => setTab("wealth") },
+          { icon: "✦", label: "Ask AI assistant", action: () => onOpenChat() },
+        ].map(({ icon, label, action }) => (
+          <button key={label} onClick={action}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 8px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, transition: "border-color 0.15s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}>
+            <span style={{ fontSize: 20 }}>{icon}</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: C.textSoft }}>{label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 14 }}>
+
+        {/* ── Budget bars ── */}
+        {budgetBars.length > 0 && (
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Budget this month</div>
+              <button onClick={() => setTab("expenses")} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer" }}>See all →</button>
+            </div>
+            {budgetBars.map(b => (
+              <div key={b.category} style={{ marginBottom: 9 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
+                  <span style={{ color: C.text }}>{CAT_ICONS[b.category] || "📦"} {b.category}</span>
+                  <span style={{ color: b.pct >= 90 ? C.red : C.muted, fontWeight: b.pct >= 90 ? 600 : 400 }}>{b.pct}% · {fmtHUF(b.spent)} / {fmtHUF(b.limit)}</span>
+                </div>
+                <div style={{ height: 6, background: C.surfaceHigh, borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${b.pct}%`, background: b.pct >= 90 ? C.red : b.pct >= 70 ? C.orange : C.green, borderRadius: 4 }} />
+                </div>
+              </div>
+            ))}
+          </Card>
+        )}
+
+        {/* ── Savings goals ── */}
+        {goals.length > 0 && (
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Savings goals</div>
+              <button onClick={() => setTab("expenses")} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer" }}>See all →</button>
+            </div>
+            {goals.map((g, gi) => {
+              const target = toHUF(g.targetAmount, g.currency || "HUF");
+              const current = toHUF(g.currentAmount, g.currency || "HUF");
+              const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
+              const done = pct >= 100;
+              const gc = done ? C.green : goalColors[gi % goalColors.length];
+              return (
+                <div key={g.id} style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                    <span style={{ fontWeight: 500, color: C.text }}>{g.name}</span>
+                    <span style={{ color: done ? C.green : C.muted, fontWeight: 600 }}>{pct}%{done ? " 🎉" : ""}</span>
+                  </div>
+                  <div style={{ height: 6, background: C.surfaceHigh, borderRadius: 4, overflow: "hidden", marginBottom: 3 }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: gc, borderRadius: 4 }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: C.muted }}>{fmtHUF(current)} / {fmtHUF(target)}{g.targetDate ? ` · by ${g.targetDate}` : ""}</div>
+                </div>
+              );
+            })}
+          </Card>
+        )}
+      </div>
+
+      {/* ── Recent transactions ── */}
+      {recentTxns.length > 0 && (
+        <Card>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>Recent transactions</div>
+            <button onClick={() => setTab("expenses")} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer" }}>See all →</button>
+          </div>
+          {recentTxns.map((t, i) => (
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: i < recentTxns.length - 1 ? `1px solid ${C.border}` : "none" }}>
+              <span style={{ width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", background: t.type === "income" ? C.green + "20" : C.red + "15", borderRadius: 6, fontSize: 13, flexShrink: 0 }}>
+                {CAT_ICONS[t.category] || "📦"}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</div>
+                <div style={{ fontSize: 10, color: C.muted }}>{t.date} · {t.category}</div>
+              </div>
+              <div style={{ fontWeight: 600, flexShrink: 0, fontSize: 12, color: t.type === "income" ? C.green : C.red }}>
+                {t.type === "income" ? "+" : "−"}{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // ─── Cash Flow & Expenses Tab (merged) ────────────────────────────────────────
 function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpenUpload, viewMonth }) {
   const isMobile = useIsMobile();
@@ -4612,6 +4845,8 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
   const [filterCat, setFilterCat] = useState("All");
   const [filterAmtMin, setFilterAmtMin] = useState("");
   const [filterAmtMax, setFilterAmtMax] = useState("");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
   const [filterType, setFilterType] = useState("all"); // "all" | "transaction" | "bill"
   const [filterSort, setFilterSort] = useState("date_desc");
   const [adding, setAdding] = useState(false);
@@ -4635,7 +4870,7 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
     return { month: new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "short", year: "2-digit" }), income: Math.round(inc), expenses: Math.round(exp) };
   });
 
-  const byCategory = CATEGORIES.filter(c => c !== "Income" && c !== "Transfer").map(cat => ({
+  const byCategory = allCategories(data).filter(c => c !== "Income" && c !== "Transfer").map(cat => ({
     name: cat,
     value: monthTxns.filter(t => t.category === cat && t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0)
   })).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
@@ -4669,6 +4904,8 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
     if (filterCat !== "All") items = items.filter(t => t.category === filterCat);
     if (filterAmtMin) items = items.filter(t => toHUF(Math.abs(t.amount), t.currency) >= parseFloat(filterAmtMin));
     if (filterAmtMax) items = items.filter(t => toHUF(Math.abs(t.amount), t.currency) <= parseFloat(filterAmtMax));
+    if (filterDateFrom) items = items.filter(t => (t.date || "") >= filterDateFrom);
+    if (filterDateTo) items = items.filter(t => (t.date || "") <= filterDateTo);
     if (filterSort === "date_desc") items.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     else if (filterSort === "date_asc") items.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     else if (filterSort === "amt_desc") items.sort((a, b) => toHUF(Math.abs(b.amount), b.currency) - toHUF(Math.abs(a.amount), a.currency));
@@ -4717,7 +4954,7 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
                 <select value="Other" onChange={e => reclassify(t.id, e.target.value)}
                   style={{ fontSize: 11, padding: "2px 4px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer", flexShrink: 0 }}>
                   <option value="Other" disabled>Categorize…</option>
-                  {CATEGORIES.filter(c => c !== "Income").map(c => <option key={c} value={c}>{c}</option>)}
+                  {allCategories(data).filter(c => c !== "Income").map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
             ))}
@@ -4737,6 +4974,38 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
           {savingsRate !== null && <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 3 }}>of income saved</div>}
         </Card>
       </div>
+
+      {/* ── Spending pace bar ── */}
+      {(() => {
+        const totalBudget = (data.budgetTargets || []).reduce((s, bt) => s + toHUF(bt.monthlyLimit, bt.currency || "HUF"), 0);
+        if (totalBudget <= 0) return null;
+        const now2 = new Date();
+        const daysInMonth2 = new Date(now2.getFullYear(), now2.getMonth() + 1, 0).getDate();
+        const dayOfMonth2 = viewMonth === `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}` ? now2.getDate() : daysInMonth2;
+        const monthFrac = dayOfMonth2 / daysInMonth2;
+        const expectedSpend = Math.round(totalBudget * monthFrac);
+        const pacePct = Math.round((expenses / totalBudget) * 100);
+        const isOverPace = expenses > expectedSpend;
+        const [_vy2, _vm2] = viewMonth.split("-").map(Number);
+        const viewMonthLabel2 = new Date(_vy2, _vm2 - 1, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
+        return (
+          <Card style={{ padding: "12px 16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Spending pace — {viewMonthLabel2}</div>
+              <div style={{ fontSize: 11, color: C.muted }}>Day {dayOfMonth2} of {daysInMonth2}</div>
+            </div>
+            <div style={{ position: "relative", height: 10, background: C.surfaceHigh, borderRadius: 6, overflow: "visible", marginBottom: 6 }}>
+              <div style={{ height: "100%", width: `${Math.min(pacePct, 100)}%`, background: pacePct > 100 ? C.red : pacePct > 90 ? C.orange : pacePct > 70 ? C.accent : C.green, borderRadius: 6 }} />
+              <div style={{ position: "absolute", top: -3, bottom: -3, left: `${Math.min(Math.round(monthFrac * 100), 100)}%`, width: 2, background: C.muted, borderRadius: 1 }} title="On-pace target for today" />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, flexWrap: "wrap", gap: 4 }}>
+              <span>Spent: <strong style={{ color: isOverPace ? C.red : C.text }}>{fmtHUF(expenses)}</strong></span>
+              <span>On-pace target: {fmtHUF(expectedSpend)}</span>
+              <span>Monthly budget: {fmtHUF(totalBudget)}</span>
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* ── Monthly overview (all months) ── */}
       {monthlySummary.length > 1 && (
@@ -4801,7 +5070,7 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
             <BarChart data={byCategory} layout="vertical" margin={{ left: 0, right: 72 }}>
               <XAxis type="number" tick={false} axisLine={false} tickLine={false} />
               <YAxis type="category" dataKey="name" tick={{ fill: C.text, fontSize: 11 }} width={96} axisLine={false} tickLine={false} interval={0} />
-              <Tooltip formatter={v => [fmtHUF(v), "Spent"]} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} cursor={{ fill: C.surfaceHigh }} />
+              <Tooltip formatter={v => [fmtHUF(v), "Spent"]} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text }} cursor={{ fill: "transparent" }} />
               <Bar dataKey="value" radius={[0, 4, 4, 0]} style={{ cursor: "pointer" }}
                 onClick={(entry) => { setFilterCat(entry.name); setTxOpen(true); setFilterType("transaction"); }}>
                 {byCategory.map((entry, i) => (
@@ -4815,6 +5084,35 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
           <div style={{ fontSize: 11, color: C.muted, marginTop: 6, textAlign: "right" }}>Tap a bar to filter the list below ↓</div>
         </Card>
       )}
+
+      {/* ── Latest 5 transactions (pinned) ── */}
+      {(() => {
+        const latest = [...data.transactions].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 5);
+        if (latest.length === 0) return null;
+        const CAT_ICONS2 = { Housing: "🏠", Food: "🛒", Transport: "🚗", Utilities: "⚡", Health: "💊", Entertainment: "🎬", Clothing: "👔", Education: "📚", Savings: "🏦", Other: "📦", Income: "💵", Garden: "🌿" };
+        return (
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Latest transactions</div>
+              <button onClick={() => setTxOpen(true)} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer" }}>Browse all →</button>
+            </div>
+            {latest.map((t, i) => (
+              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: i < latest.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                <span style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", background: t.type === "income" ? C.green + "20" : C.red + "15", borderRadius: 7, fontSize: 14, flexShrink: 0 }}>
+                  {CAT_ICONS2[t.category] || "📦"}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.desc}</div>
+                  <div style={{ fontSize: 10, color: C.muted }}>{t.date} · {t.category}</div>
+                </div>
+                <div style={{ fontWeight: 600, flexShrink: 0, fontSize: 12, color: t.type === "income" ? C.green : C.red }}>
+                  {t.type === "income" ? "+" : "−"}{fmtHUF(toHUF(Math.abs(t.amount), t.currency))}
+                </div>
+              </div>
+            ))}
+          </Card>
+        );
+      })()}
 
       {/* ── Browse transactions & costs ── */}
       <Card style={{ padding: 0, overflow: "hidden", border: `1px solid ${txOpen ? C.accent + "55" : C.border}` }}>
@@ -4848,8 +5146,13 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
               <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
                 style={{ fontSize: 11, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer" }}>
                 <option value="All">All categories</option>
-                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                {allCategories(data).map(c => <option key={c} value={c}>{c}</option>)}
               </select>
+              {/* Date range */}
+              <input value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} placeholder="From"
+                style={{ fontSize: 11, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, width: isMobile ? 108 : 118 }} type="date" title="From date" />
+              <input value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} placeholder="To"
+                style={{ fontSize: 11, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, width: isMobile ? 108 : 118 }} type="date" title="To date" />
               {/* Amount range */}
               <input value={filterAmtMin} onChange={e => setFilterAmtMin(e.target.value)} placeholder="Min Ft"
                 style={{ width: 72, fontSize: 11, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text }} type="number" />
@@ -4864,8 +5167,8 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
                 <option value="amt_asc">Amount ↑</option>
               </select>
               {/* Clear */}
-              {(filterCat !== "All" || filterAmtMin || filterAmtMax || filterType !== "all") && (
-                <button onClick={() => { setFilterCat("All"); setFilterAmtMin(""); setFilterAmtMax(""); setFilterType("all"); }}
+              {(filterCat !== "All" || filterAmtMin || filterAmtMax || filterType !== "all" || filterDateFrom || filterDateTo) && (
+                <button onClick={() => { setFilterCat("All"); setFilterAmtMin(""); setFilterAmtMax(""); setFilterType("all"); setFilterDateFrom(""); setFilterDateTo(""); }}
                   style={{ fontSize: 11, padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceHigh, color: C.muted, cursor: "pointer" }}>
                   Clear ×
                 </button>
@@ -5001,7 +5304,7 @@ function AppInner() {
   const [session, setSession] = useState(null);
   const [isDemo, setIsDemo] = useState(false);
   const [authReady, setAuthReady] = useState(false);
-  const [tab, setTab] = useState("expenses");
+  const [tab, setTab] = useState("dashboard");
   const [chatOpen, setChatOpen] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [sweepOpen, setSweepOpen] = useState(false);
@@ -5124,9 +5427,11 @@ function AppInner() {
     return <GDPRConsentGate userId={session.user.id} onAccept={() => setConsentGiven(true)} />;
   }
 
+  const uncategorizedCount = (data.transactions || []).filter(t => t.category === "Other" && t.type === "expense").length;
   const tabs = [
-    { id: "expenses", label: "Cash flow & costs", icon: "💸" },
-    { id: "wealth",   label: "Wealth",             icon: "📈" },
+    { id: "dashboard", label: "Dashboard",         icon: "🏠" },
+    { id: "expenses",  label: "Cash flow",         icon: "💸", badge: uncategorizedCount > 0 ? uncategorizedCount : null },
+    { id: "wealth",    label: "Wealth",             icon: "📈" },
   ];
   const readonly = isDemo;
 
@@ -5163,8 +5468,12 @@ function AppInner() {
         {!isMobile && (
           <nav style={{ display: "flex", gap: 4 }}>
             {tabs.map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: "6px 16px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, background: tab === t.id ? C.accent : "transparent", color: tab === t.id ? "#000" : C.muted }}>
+              <button key={t.id} onClick={() => setTab(t.id)}
+                style={{ padding: "6px 16px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, background: tab === t.id ? C.accent : "transparent", color: tab === t.id ? "#000" : C.muted, position: "relative" }}>
                 {t.label}
+                {t.badge && (
+                  <span style={{ position: "absolute", top: 0, right: 2, background: C.orange, color: "#000", fontSize: 9, fontWeight: 800, borderRadius: 8, padding: "1px 5px", lineHeight: 1.4 }}>{t.badge}</span>
+                )}
               </button>
             ))}
           </nav>
@@ -5230,6 +5539,7 @@ function AppInner() {
 
       {/* ── Main content ── */}
       <main style={{ padding: isMobile ? "16px 12px" : "24px clamp(16px, 2vw, 32px)", maxWidth: "min(2400px, 98vw)", margin: "0 auto", width: "100%", boxSizing: "border-box", paddingBottom: isMobile ? 80 : undefined }}>
+        {tab === "dashboard" && <Dashboard data={data} setTab={setTab} viewMonth={viewMonth} onOpenChat={handleOpenChat} />}
         {tab === "expenses" && <CashFlowExpenses data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} viewMonth={viewMonth} />}
         {tab === "wealth" && <Wealth data={data} setData={setData} readonly={readonly} onImport={handleImport} onOpenChat={handleOpenChat} onOpenUpload={handleOpenUpload} />}
       </main>
@@ -5239,8 +5549,11 @@ function AppInner() {
         <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 64, background: C.surface, borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", zIndex: 60 }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "8px 0", color: tab === t.id ? C.accent : C.muted }}>
+              style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "8px 0", color: tab === t.id ? C.accent : C.muted, position: "relative" }}>
               <span style={{ fontSize: 18, lineHeight: 1 }}>{t.icon}</span>
+              {t.badge && (
+                <span style={{ position: "absolute", top: 6, left: "50%", marginLeft: 4, background: C.orange, color: "#000", fontSize: 8, fontWeight: 800, borderRadius: 6, padding: "1px 4px", lineHeight: 1.4 }}>{t.badge}</span>
+              )}
               <span style={{ fontSize: 10, fontWeight: tab === t.id ? 700 : 400 }}>{t.label}</span>
               {tab === t.id && <div style={{ width: 20, height: 2, background: C.accent, borderRadius: 1, marginTop: 1 }} />}
             </button>
