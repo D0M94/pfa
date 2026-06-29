@@ -491,15 +491,30 @@ async function fileToText(file) {
 //   1) split the file into sheets+rows (handles CSV and the XLSX→text format),
 //   2) ask the AI to map columns→roles from a SMALL sample (cheap, bounded),
 //   3) parse ALL rows locally with that mapping (no row-count token limits).
-function _csvSplit(line) {
+// Split one line on a delimiter, respecting double-quotes.
+function _splitDelim(line, d) {
   const out = []; let cur = "", q = false;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
-    else if (ch === "," && !q) { out.push(cur); cur = ""; }
+    else if (ch === d && !q) { out.push(cur); cur = ""; }
     else cur += ch;
   }
-  out.push(cur); return out.map(s => s.trim());
+  out.push(cur);
+  return out.map(s => s.trim().replace(/^"|"$/g, ""));
+}
+// Detect the delimiter used (comma / semicolon / tab / pipe) from the first lines.
+// Crucial for European & Hungarian exports, which usually use ";".
+function detectDelimiter(text) {
+  const lines = String(text || "").split(/\r?\n/).filter(l => l.trim()).slice(0, 8);
+  if (!lines.length) return ",";
+  let best = ",", bestScore = -1;
+  for (const d of [";", ",", "\t", "|"]) {
+    const counts = lines.map(l => { let n = 0, q = false; for (let i = 0; i < l.length; i++) { const c = l[i]; if (c === '"') q = !q; else if (c === d && !q) n++; } return n; });
+    const min = Math.min(...counts), sum = counts.reduce((a, b) => a + b, 0);
+    if (min > 0) { const score = min * 1000 + sum; if (score > bestScore) { bestScore = score; best = d; } }
+  }
+  return best;
 }
 function parseDelimitedToSheets(text) {
   const t = String(text || "");
@@ -508,13 +523,65 @@ function parseDelimitedToSheets(text) {
     const sheets = [];
     for (let i = 1; i < parts.length; i += 2) {
       const name = parts[i] || `Sheet${(i + 1) / 2}`;
-      const rows = (parts[i + 1] || "").split(/\r?\n/).filter(l => l.length).map(_csvSplit);
+      const body = parts[i + 1] || "";
+      const d = detectDelimiter(body);
+      const rows = body.split(/\r?\n/).filter(l => l.length).map(l => _splitDelim(l, d));
       if (rows.length) sheets.push({ name, rows });
     }
     if (sheets.length) return sheets;
   }
-  const rows = t.split(/\r?\n/).filter(l => l.length).map(_csvSplit);
+  const d = detectDelimiter(t);
+  const rows = t.split(/\r?\n/).filter(l => l.length).map(l => _splitDelim(l, d));
   return [{ name: "Sheet1", rows }];
+}
+
+// Accent-insensitive normaliser for header matching (árfolyam → arfolyam).
+function _norm(s) { return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, ""); }
+
+// Keyword-based column detection in Hungarian + English (no AI needed).
+// Roles are checked in priority order so ambiguous headers resolve sensibly.
+const HEADER_PATTERNS = [
+  ["isin", ["isin"]],
+  ["currency", ["deviza", "devizanem", "penznem", "valuta", "currency", "ccy", "curr"]],
+  ["quantity", ["darabszam", "darab", "mennyiseg", "namennyiseg", "qty", "quantity", "units", "shares", "nominal", "stk", "db", "pieces", "pcs"]],
+  ["costPrice", ["atlagarfolyam", "atlagar", "bekerulesiarfolyam", "bekerulesi", "vetelar", "beszerzesi", "avgcost", "averageprice", "avgprice", "purchaseprice", "bookcost", "costbasis", "cost", "konyvszerinti"]],
+  ["currentPrice", ["aktualisarfolyam", "napiarfolyam", "utolsoarfolyam", "arfolyam", "piaciar", "aktualisar", "currentprice", "marketprice", "lastprice", "last", "price", "close", "quote", "kurzus", "nav"]],
+  ["marketValue", ["piaciertek", "aktualisertek", "osszertek", "pozicioertek", "marketvalue", "mktvalue", "valuation", "positionvalue", "ertek", "value", "osszeg", "egyenleg", "balance"]],
+  ["ticker", ["ticker", "szimbolum", "symbol", "jelzes", "tickerszimbolum"]],
+  ["name", ["megnevezes", "ertekpapirmegnevezes", "ertekpapir", "instrumentum", "eszkozneve", "eszkoz", "termek", "instrumentname", "instrument", "security", "description", "holding", "fund", "name", "nev", "elnevezes"]],
+  ["assetClass", ["eszkozosztaly", "instrumenttype", "assetclass", "kategoria", "tipus", "category", "type"]],
+];
+// Return the most SPECIFIC role for a header — the role whose matched keyword is
+// longest. This stops "értékpapír" (security/name) being grabbed by "érték" (value),
+// or "eszközosztály" (asset class) by "eszköz" (asset/name).
+function _bestRoleForHeader(h) {
+  const n = _norm(h);
+  if (!n) return null;
+  let bestRole = null, bestLen = 0;
+  for (const [role, pats] of HEADER_PATTERNS) {
+    for (const p of pats) { if (n.includes(p) && p.length > bestLen) { bestLen = p.length; bestRole = role; } }
+  }
+  return bestRole ? { role: bestRole, len: bestLen } : null;
+}
+function heuristicSchema(sheets) {
+  let best = null;
+  sheets.forEach((sh, si) => {
+    const scan = Math.min(sh.rows.length, 25);
+    for (let r = 0; r < scan; r++) {
+      const row = sh.rows[r] || [];
+      const cols = {}, roleLen = {};
+      row.forEach((cell, ci) => {
+        const b = _bestRoleForHeader(cell);
+        if (b && (cols[b.role] == null || b.len > roleLen[b.role])) { cols[b.role] = ci; roleLen[b.role] = b.len; }
+      });
+      const matches = Object.keys(cols).length;
+      const hasVal = cols.currentPrice != null || cols.marketValue != null;
+      const hasName = cols.name != null || cols.ticker != null || cols.isin != null;
+      const score = matches + (hasName && hasVal ? 2 : 0);
+      if (matches >= 2 && (!best || score > best.score)) best = { sheetIndex: si, headerRow: r, columns: cols, globalCurrency: null, score };
+    }
+  });
+  return best;
 }
 // Locale-tolerant number parser: handles "1.234,56", "1,234.56", "1 234,5", "(123)".
 function parseLooseNum(v) {
@@ -4482,6 +4549,87 @@ function QuickAdd({ setData, onClose, isMobile }) {
   );
 }
 
+// ─── Manual column mapper (guaranteed-to-work import fallback) ─────────────────
+// Shows the uploaded file as a preview and lets the user pick which column holds
+// each field. Pre-filled from auto-detection; the preview updates live.
+function ColumnMapper({ sheets, fileName, guess, onCancel, onConfirm }) {
+  const ROLES = [
+    ["name", "Name / Instrument"], ["ticker", "Ticker / Symbol"], ["isin", "ISIN"],
+    ["quantity", "Quantity / Units"], ["costPrice", "Cost / Avg price"], ["currentPrice", "Current price"],
+    ["marketValue", "Market value"], ["currency", "Currency"], ["assetClass", "Asset class"],
+  ];
+  const [sheetIndex, setSheetIndex] = useState(guess?.sheetIndex || 0);
+  const [headerRow, setHeaderRow] = useState(guess?.headerRow || 0);
+  const [cols, setCols] = useState(() => ({ ...(guess?.columns || {}) }));
+  const [globalCur, setGlobalCur] = useState(guess?.globalCurrency || "");
+  const sh = sheets[sheetIndex] || sheets[0] || { rows: [] };
+  const headerCells = sh.rows[headerRow] || [];
+  const maxCols = Math.max(0, ...sh.rows.slice(0, 30).map(r => r.length));
+  const colOpts = Array.from({ length: maxCols }, (_, i) => ({ i, label: `Col ${i}${headerCells[i] ? " · " + String(headerCells[i]).slice(0, 20) : ""}` }));
+  const schema = { sheetIndex, headerRow, columns: cols, globalCurrency: globalCur || null };
+  const preview = buildPositionsFromSchema(sheets, schema, fileName);
+  const items = preview ? preview.items : [];
+  const setRole = (role, v) => setCols(c => ({ ...c, [role]: v === "" ? null : Number(v) }));
+  const selStyle = { background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 8px", color: C.text, fontSize: 12, outline: "none", width: "100%" };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 22, width: "min(680px, 96vw)", maxHeight: "92vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Map import columns</div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{fileName} — tell the app which column holds each field. The preview updates live.</div>
+
+        <div style={{ display: "grid", gridTemplateColumns: sheets.length > 1 ? "1fr 1fr 1fr" : "1fr 1fr", gap: 10, marginBottom: 14 }}>
+          {sheets.length > 1 && (
+            <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>Sheet</div>
+              <select value={sheetIndex} onChange={e => setSheetIndex(Number(e.target.value))} style={selStyle}>
+                {sheets.map((s, i) => <option key={i} value={i}>{s.name} ({s.rows.length} rows)</option>)}
+              </select></div>
+          )}
+          <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>Header row #</div>
+            <input type="number" min={0} value={headerRow} onChange={e => setHeaderRow(Math.max(0, Number(e.target.value) || 0))} style={selStyle} /></div>
+          <div><div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", marginBottom: 3 }}>Currency (if no column)</div>
+            <select value={globalCur} onChange={e => setGlobalCur(e.target.value)} style={selStyle}>
+              <option value="">Auto / per row</option>{["EUR", "USD", "HUF", "GBP"].map(c => <option key={c} value={c}>{c}</option>)}
+            </select></div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+          {ROLES.map(([role, label]) => (
+            <div key={role}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>{label}</div>
+              <select value={cols[role] == null ? "" : cols[role]} onChange={e => setRole(role, e.target.value)} style={selStyle}>
+                <option value="">—</option>
+                {colOpts.map(o => <option key={o.i} value={o.i}>{o.label}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: items.length ? C.green : C.orange }}>
+            {items.length ? `✓ ${items.length} holding${items.length === 1 ? "" : "s"} detected` : "No holdings detected yet — adjust the columns above"}
+          </div>
+          {items.slice(0, 4).map((it, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.textSoft, padding: "3px 0" }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{it.ticker ? it.ticker + " · " : ""}{it.name}</span>
+              <span style={{ color: C.muted }}>{it.qty} × {it.currentPrice} {it.currency}</span>
+            </div>
+          ))}
+          {items.length > 4 && <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>+ {items.length - 4} more</div>}
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn onClick={() => onConfirm(schema)} disabled={!items.length} style={{ flex: 1 }}>Import {items.length || ""} holdings</Btn>
+          <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
 function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPendingImport, isMobile, initialMessage, clearInitialMessage, triggerFileOpen, clearTriggerFileOpen, onShowPrivacy }) {
   const [messages, setMessages] = useState([]);
@@ -4492,6 +4640,7 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   const [attachedFile, setAttachedFile] = useState(null);
   const [fileType, setFileType] = useState(null);
   const [pendingBatch, setPendingBatch] = useState(null);
+  const [pendingMapping, setPendingMapping] = useState(null); // { sheets, fileName, guess } — manual column mapper
   const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
 
@@ -4524,22 +4673,35 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
     setMessages(m => [...m, { role: "user", content: `📎 ${fileName} [Investment export]` }]);
     setMessages(m => [...m, { role: "assistant", content: "Reading the file and identifying the columns…" }]);
     setLoading(true);
+    let sheets = [];
     try {
-      const sheets = parseDelimitedToSheets(text);
-      const schema = await aiDetectInvestmentSchema(sheets);
-      const batch = schema ? buildPositionsFromSchema(sheets, schema, fileName) : null;
+      sheets = parseDelimitedToSheets(text);
+      // 1) Fast keyword detection (Hungarian + English headers, no AI round-trip).
+      let schema = heuristicSchema(sheets);
+      let batch = schema ? buildPositionsFromSchema(sheets, schema, fileName) : null;
+      // 2) Ask the AI to map columns if the heuristic didn't yield holdings.
+      if (!batch || !batch.items.length) {
+        try {
+          const ai = await aiDetectInvestmentSchema(sheets);
+          if (ai) { const b2 = buildPositionsFromSchema(sheets, ai, fileName); if (b2 && b2.items.length) { schema = ai; batch = b2; } }
+        } catch {}
+      }
       if (batch && batch.items.length) {
         setMessages(m => [...m, { role: "assistant", content: `Mapped the columns and parsed ${batch.items.length} holding${batch.items.length === 1 ? "" : "s"}. Live prices will fill in current values where missing — review and confirm below.` }]);
         setPendingBatch({ ...batch, duplicates: batch.items.map(() => false), checked: batch.items.map(() => true) });
       } else {
-        setAttachedFile({ name: fileName, text });
-        setFileType("investment_export");
-        setMessages(m => [...m, { role: "assistant", content: "I couldn't confidently map the columns. I've attached the file — press send and I'll parse it directly." }]);
+        // 3) Guaranteed fallback: let the user map the columns by hand.
+        setMessages(m => [...m, { role: "assistant", content: "I couldn't auto-detect the columns — please map them below. The preview updates as you choose." }]);
+        setPendingMapping({ sheets, fileName, guess: schema || { sheetIndex: 0, headerRow: 0, columns: {}, globalCurrency: null } });
       }
     } catch (e) {
-      setAttachedFile({ name: fileName, text });
-      setFileType("investment_export");
-      setMessages(m => [...m, { role: "assistant", content: "Auto-mapping failed — I've attached the file, press send to parse it directly." }]);
+      if (sheets && sheets.length) {
+        setMessages(m => [...m, { role: "assistant", content: "I couldn't auto-detect the columns — please map them below." }]);
+        setPendingMapping({ sheets, fileName, guess: { sheetIndex: 0, headerRow: 0, columns: {}, globalCurrency: null } });
+      } else {
+        setAttachedFile({ name: fileName, text }); setFileType("investment_export");
+        setMessages(m => [...m, { role: "assistant", content: "Couldn't read the file — press send and I'll try to parse it directly." }]);
+      }
     }
     setLoading(false);
   }
@@ -4834,6 +4996,24 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
 
   return (
     <div style={{ position: "fixed", bottom: isMobile ? 0 : 28, right: isMobile ? 0 : 28, left: isMobile ? 0 : "auto", top: isMobile ? 0 : "auto", width: isMobile ? "100%" : 430, height: isMobile ? "100%" : 620, background: C.surface, border: isMobile ? "none" : `1px solid ${C.border}`, borderRadius: isMobile ? 0 : 16, display: "flex", flexDirection: "column", zIndex: 100, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
+
+      {/* Manual column mapper (guaranteed import fallback) */}
+      {pendingMapping && (
+        <ColumnMapper
+          sheets={pendingMapping.sheets}
+          fileName={pendingMapping.fileName}
+          guess={pendingMapping.guess}
+          onCancel={() => setPendingMapping(null)}
+          onConfirm={(schema) => {
+            const b = buildPositionsFromSchema(pendingMapping.sheets, schema, pendingMapping.fileName);
+            setPendingMapping(null);
+            if (b && b.items.length) {
+              setMessages(m => [...m, { role: "assistant", content: `Parsed ${b.items.length} holding${b.items.length === 1 ? "" : "s"} from your mapping. Live prices will fill in current values — review and confirm below.` }]);
+              setPendingBatch({ ...b, duplicates: b.items.map(() => false), checked: b.items.map(() => true) });
+            }
+          }}
+        />
+      )}
 
       {/* Header */}
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
