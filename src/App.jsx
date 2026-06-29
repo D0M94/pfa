@@ -15,8 +15,30 @@ const supabase = createClient(
 const DEMO_ID = import.meta.env.VITE_DEMO_HOUSEHOLD_ID;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const EUR_HUF = 358;
-const USD_HUF = 310;
+// Currency layer. All internal math is done in HUF (the base currency).
+// RATES = HUF per 1 unit of the given currency. Updated at runtime from the ECB
+// (frankfurter.app, free + no key + CORS) and cached daily in localStorage.
+// DISPLAY.cur is the currency the user has chosen for all formatted figures.
+const RATES = { EUR: 358, USD: 310, HUF: 1 }; // fallbacks until live rates load
+const DISPLAY = { cur: "HUF" };
+
+// Fetch live ECB rates once per day, cache in localStorage. Returns
+// { date, EUR, USD, EURUSD } where EUR/USD are HUF-per-unit, or null on failure.
+async function fetchFXRates() {
+  const today = new Date().toISOString().slice(0, 10);
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem("pfa_fx_v1") || "null"); } catch { cached = null; }
+  if (cached && cached.date === today && cached.EUR && cached.USD) return cached;
+  try {
+    const res = await fetch("https://api.frankfurter.app/latest?from=EUR&to=HUF,USD");
+    const j = await res.json();
+    const hufPerEur = j.rates?.HUF, usdPerEur = j.rates?.USD;
+    if (!hufPerEur || !usdPerEur) return cached;
+    const out = { date: today, EUR: hufPerEur, USD: hufPerEur / usdPerEur, EURUSD: usdPerEur };
+    try { localStorage.setItem("pfa_fx_v1", JSON.stringify(out)); } catch {}
+    return out;
+  } catch { return cached; }
+}
 
 const DARK_C = {
   bg: "#0f0f11", surface: "#18181c", surfaceHigh: "#222228", border: "#2a2a32",
@@ -44,12 +66,66 @@ const CATEGORIES = ["Housing","Food","Transport","Utilities","Health","Education
 const PIE_COLORS = [C.blue, C.green, C.accent, C.purple, C.orange, C.red, C.muted, C.textSoft, "#e87ca0", "#7acc7a", C.blue, C.orange, C.muted];
 
 function toHUF(amount, currency) {
-  if (currency === "EUR") return amount * EUR_HUF;
-  if (currency === "USD") return amount * USD_HUF;
+  if (currency === "EUR") return amount * RATES.EUR;
+  if (currency === "USD") return amount * RATES.USD;
   return amount;
 }
-function fmtHUF(n) { return Math.round(n).toLocaleString("hu-HU") + " Ft"; }
+// Convert an HUF amount back into another currency.
+function fromHUF(nHUF, cur) {
+  if (cur === "EUR") return nHUF / RATES.EUR;
+  if (cur === "USD") return nHUF / RATES.USD;
+  return nHUF;
+}
+// Format an HUF-denominated amount in the user's chosen display currency.
+// Kept named fmtHUF so all existing call sites convert automatically.
+function fmtHUF(n) {
+  const cur = DISPLAY.cur || "HUF";
+  const v = fromHUF(Number(n) || 0, cur);
+  if (cur === "HUF") return Math.round(v).toLocaleString("hu-HU") + " Ft";
+  const dec = Math.abs(v) >= 100000 ? 0 : 2; // drop cents on large sums for readability
+  const s = v.toLocaleString(cur === "EUR" ? "en-IE" : "en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  return (cur === "EUR" ? "€" : "$") + s;
+}
 function todayStr() { return new Date().toISOString().slice(0, 10); }
+function addMonthsISO(iso, n) {
+  const d = new Date((iso || todayStr()) + "T00:00:00");
+  d.setMonth(d.getMonth() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// ─── Live asset prices (Twelve Data — free tier, CORS-friendly) ───────────────
+// Data-efficient: one batched request for all tickers, results cached for the day
+// in localStorage so re-opening the app or switching tabs costs no API calls.
+// Requires a free API key (twelvedata.com), stored device-locally. Without a key
+// the app keeps the manually entered prices.
+const PRICE_KEY_LS = "pfa_price_apikey";
+function getPriceApiKey() {
+  try { return localStorage.getItem(PRICE_KEY_LS) || (import.meta.env.VITE_TWELVEDATA_KEY || ""); } catch { return ""; }
+}
+async function fetchLivePrices(tickers, apiKey, { force = false } = {}) {
+  const uniq = [...new Set((tickers || []).filter(Boolean))];
+  if (!uniq.length || !apiKey) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  let cache = {};
+  try { const c = JSON.parse(localStorage.getItem("pfa_prices_v1") || "null"); if (c && c.date === today && !force) cache = c.prices || {}; } catch {}
+  const need = uniq.filter(t => cache[t] == null);
+  if (need.length) {
+    try {
+      const url = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(need.join(","))}&apikey=${encodeURIComponent(apiKey)}`;
+      const res = await fetch(url);
+      const j = await res.json();
+      if (need.length === 1) {
+        if (j && j.price) cache[need[0]] = parseFloat(j.price);
+      } else {
+        for (const t of need) { const v = j?.[t]?.price; if (v) cache[t] = parseFloat(v); }
+      }
+      try { localStorage.setItem("pfa_prices_v1", JSON.stringify({ date: today, prices: cache })); } catch {}
+    } catch { /* network/quota error — fall through with whatever is cached */ }
+  }
+  const prices = {}, missing = [];
+  for (const t of uniq) { if (cache[t] != null && !isNaN(cache[t])) prices[t] = cache[t]; else missing.push(t); }
+  return { prices, missing, fetched: Object.keys(prices) };
+}
 
 // ─── SheetJS loader (lazy, only when a spreadsheet is attached) ───────────────
 let xlsxReady = false;
@@ -158,6 +234,111 @@ function tryParseRevolutCSV(text, learnedRules = {}) {
   return rows.length > 0 ? rows : null;
 }
 
+// ─── Lightyear CSV parser (client-side) ──────────────────────────────────────
+// Lightyear exports a transaction LOG (Buy/Sell/Dividend/Deposit/Conversion),
+// not a position list. We reconstruct holdings: aggregate Buys/Sells per ticker
+// into a weighted-average cost basis (net of fees), and roll up Dividends as
+// cash held in the portfolio (per currency). Deposits/Conversions are internal
+// cash movements and are ignored. Returns a positions batch, or null.
+function tryParseLightyearCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return null;
+  function parseLine(line) {
+    const cols = []; let cur = "", q = false;
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j];
+      if (ch === '"') q = !q;
+      else if (ch === "," && !q) { cols.push(cur.trim()); cur = ""; }
+      else cur += ch;
+    }
+    cols.push(cur.trim()); return cols;
+  }
+  const header = parseLine(lines[0]).map(h => h.toLowerCase().replace(/\.$/, "").trim());
+  const idx = name => header.findIndex(h => h === name);
+  const cTicker = idx("ticker"), cISIN = idx("isin"), cType = idx("type"), cQty = idx("quantity"),
+        cCcy = idx("ccy"), cPrice = idx("price/share"), cGross = idx("gross amount"), cFee = idx("fee"),
+        cNet = idx("net amt"), cDate = idx("date");
+  // Detection: must look like a Lightyear statement
+  if (cTicker === -1 || cType === -1 || cPrice === -1 || cISIN === -1) return null;
+
+  const num = v => { const n = parseFloat(String(v == null ? "" : v).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? 0 : n; };
+  function lyDate(s) {
+    const first = (s || "").split(" ")[0];
+    const p = first.split(/[/.]/);
+    if (p.length === 3 && p[2].length === 4) return `${p[2]}-${p[1].padStart(2, "0")}-${p[0].padStart(2, "0")}`;
+    return "";
+  }
+
+  const agg = {};       // ticker -> { ticker, isin, currency, qty, cost, firstDate }
+  const cashByCcy = {}; // currency -> accumulated dividend cash
+  let rowsSeen = 0;
+
+  for (let i = 1; i < lines.length; i++) {
+    const c = parseLine(lines[i]);
+    if (c.length < header.length - 2) continue;
+    const type = (c[cType] || "").toLowerCase();
+    const ccy = (cCcy >= 0 ? c[cCcy] : "") || "EUR";
+    if (type === "buy" || type === "sell") {
+      const ticker = (c[cTicker] || "").trim();
+      if (!ticker) continue;
+      const qty = num(c[cQty]);
+      const price = num(c[cPrice]);
+      const fee = cFee >= 0 ? num(c[cFee]) : 0;
+      if (!qty) continue;
+      const a = agg[ticker] || (agg[ticker] = { ticker, isin: (cISIN >= 0 ? c[cISIN] : "") || "", currency: ccy, qty: 0, cost: 0, firstDate: "" });
+      if (type === "buy") {
+        a.qty += qty;
+        a.cost += qty * price + fee; // money invested, net of fees
+        const d = lyDate(c[cDate]);
+        if (d && (!a.firstDate || d < a.firstDate)) a.firstDate = d;
+      } else { // sell — reduce holding at current average cost
+        const avg = a.qty > 0 ? a.cost / a.qty : price;
+        a.qty -= qty;
+        a.cost -= qty * avg;
+        if (a.qty < 0.0000001) { a.qty = 0; a.cost = 0; }
+      }
+      rowsSeen++;
+    } else if (type === "dividend") {
+      const net = cNet >= 0 ? num(c[cNet]) : num(c[cGross]);
+      if (net) cashByCcy[ccy] = (cashByCcy[ccy] || 0) + net;
+      rowsSeen++;
+    }
+    // deposit / conversion / other → ignored (internal cash movements)
+  }
+  if (rowsSeen === 0) return null;
+
+  const items = [];
+  for (const t of Object.keys(agg)) {
+    const a = agg[t];
+    if (a.qty <= 0.0000001) continue;
+    const costBasis = a.cost / a.qty;
+    items.push({
+      name: a.ticker, ticker: a.ticker, isin: a.isin,
+      qty: parseFloat(a.qty.toFixed(8)),
+      costBasis: parseFloat(costBasis.toFixed(6)),
+      currentPrice: parseFloat(costBasis.toFixed(6)), // placeholder until live prices load
+      currency: a.currency, assetClass: "ETF", region: "Global",
+      purchaseDate: a.firstDate || "", notes: "Imported from Lightyear",
+    });
+  }
+  // Dividends → cash positions (kept inside the portfolio, per currency)
+  for (const ccy of Object.keys(cashByCcy)) {
+    const amt = cashByCcy[ccy];
+    if (amt <= 0) continue;
+    items.push({
+      name: `Cash · dividends (${ccy})`, ticker: ccy, isin: "",
+      qty: parseFloat(amt.toFixed(2)), costBasis: 1, currentPrice: 1,
+      currency: ccy, assetClass: "Cash", region: "Other",
+      purchaseDate: "", notes: "Accumulated dividends",
+    });
+  }
+  if (!items.length) return null;
+  const posCount = items.filter(i => i.assetClass !== "Cash").length;
+  return { type: "positions", portfolioName: "Lightyear", broker: "Lightyear",
+    summary: `${posCount} position${posCount === 1 ? "" : "s"} reconstructed from Lightyear statement${Object.keys(cashByCcy).length ? ` + dividend cash` : ""}`,
+    items };
+}
+
 // ─── Erste XLSX parser (client-side, no token limits) ────────────────────────
 // Takes a SheetJS workbook (already read with { cellDates: true }) and returns
 // an array of transaction rows, or null if the file is not an Erste statement.
@@ -245,10 +426,49 @@ function tryParseErsteXLSX(wb, learnedRules = {}) {
   return transactions.length > 0 ? transactions : null;
 }
 
-// Convert uploaded file → plain CSV text for Claude to read
+// ─── PDF text extractor (lazy, only when a PDF is attached) ───────────────────
+let pdfjsReady = false;
+function loadPDFJS() {
+  return new Promise((resolve, reject) => {
+    if (pdfjsReady || window.pdfjsLib) { pdfjsReady = true; return resolve(); }
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload = () => {
+      try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; } catch {}
+      pdfjsReady = true; resolve();
+    };
+    s.onerror = () => reject(new Error("Could not load the PDF reader. Try saving the statement as CSV instead."));
+    document.head.appendChild(s);
+  });
+}
+async function pdfToText(file) {
+  await loadPDFJS();
+  const buf = await file.arrayBuffer();
+  const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+  const pages = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    // Reconstruct rows by grouping text fragments on the same vertical line.
+    const rows = {};
+    content.items.forEach(it => {
+      const y = Math.round(it.transform[5]);
+      (rows[y] = rows[y] || []).push(it.str);
+    });
+    const lines = Object.keys(rows).sort((a, b) => b - a)
+      .map(y => rows[y].join(" ").replace(/\s+/g, " ").trim()).filter(Boolean);
+    pages.push(lines.join("\n"));
+  }
+  const text = pages.join("\n\n").trim();
+  if (!text) throw new Error("This PDF has no selectable text (it may be a scan). Try a CSV/Excel export instead.");
+  return text;
+}
+
+// Convert uploaded file → plain CSV/text for the parsers or Claude to read
 async function fileToText(file) {
   const ext = file.name.split(".").pop().toLowerCase();
   if (ext === "csv") return await file.text();
+  if (ext === "pdf") return await pdfToText(file);
   if (ext === "xlsx" || ext === "xls") {
     await loadXLSX();
     const buf = await file.arrayBuffer();
@@ -267,7 +487,7 @@ async function fileToText(file) {
       return `--- Sheet: ${name} ---\n` + csv;
     }).join("\n\n");
   }
-  throw new Error("Unsupported file type. Please upload .csv, .xlsx or .xls");
+  throw new Error("Unsupported file type. Please upload .csv, .xlsx, .xls or .pdf");
 }
 
 // ─── Default Data ─────────────────────────────────────────────────────────────
@@ -275,7 +495,9 @@ const EMPTY_DATA = {
   costs: [], transactions: [], portfolios: [], realEstate: [],
   cashAccounts: [], budgetTargets: [], savingsGoals: [], netWorthHistory: [],
   merchantRules: [], // { keyword, category } — learned from user corrections
-  customCategories: [] // user-defined categories
+  customCategories: [], // user-defined categories
+  plannedExpenses: [], // { id, name, amount, currency, date, category, notes } — upcoming one-off outlays
+  displayCurrency: "HUF" // preferred display currency (HUF | EUR | USD)
 };
 
 const DEMO_DATA = {
@@ -618,6 +840,12 @@ function AccountSettingsModal({ onClose, onExport, onDeleteRequest, userEmail, o
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [apiKey, setApiKey] = useState(() => { try { return localStorage.getItem("pfa_price_apikey") || ""; } catch { return ""; } });
+  const [apiSaved, setApiSaved] = useState(false);
+  function saveApiKey() {
+    try { localStorage.setItem("pfa_price_apikey", apiKey.trim()); } catch {}
+    setApiSaved(true); setTimeout(() => setApiSaved(false), 2000);
+  }
 
   async function handleDelete() {
     setDeleting(true);
@@ -650,6 +878,19 @@ function AccountSettingsModal({ onClose, onExport, onDeleteRequest, userEmail, o
           <Btn variant="ghost" onClick={() => { onClose(); onShowPrivacy(); }} style={{ width: "100%", textAlign: "left", padding: "11px 16px" }}>
             🔒 View Privacy Policy
           </Btn>
+        </div>
+
+        {/* Live price API key (Twelve Data) — stored on this device only */}
+        <div style={{ marginBottom: 20, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>📈 Live price API key</div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
+            Optional. Paste a free key from <span style={{ color: C.textSoft }}>twelvedata.com</span> to enable live price tracking on the Wealth tab. Stored only on this device. FX rates work without a key.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API key"
+              style={{ flex: 1, background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+            <Btn onClick={saveApiKey} style={{ flexShrink: 0 }}>{apiSaved ? "✓ Saved" : "Save"}</Btn>
+          </div>
         </div>
 
         <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
@@ -1212,7 +1453,7 @@ const UPLOAD_GUIDES = {
     icon: "📈",
     color: C.green,
     desc: "Import portfolio positions from your broker.",
-    formats: "CSV or Excel from Interactive Brokers, Erste, KBC, Erste Alapkezelő, etc.",
+    formats: "CSV, Excel or PDF from Lightyear, Interactive Brokers, Erste, KBC, Erste Alapkezelő, etc.",
     columns: [
       { name: "Asset name", example: "iShares Core MSCI World ETF", required: true },
       { name: "Ticker / Symbol", example: "IWDA, AAPL, BTC", required: false },
@@ -1223,6 +1464,7 @@ const UPLOAD_GUIDES = {
       { name: "Currency", example: "USD, EUR, HUF", required: false },
     ],
     tips: [
+      "Lightyear: Account → Statements → CSV. Positions are rebuilt from your Buy/Sell history; dividends are kept as cash.",
       "IBKR: Reports → Statements → Activity → CSV",
       "At least 2 of: quantity, purchase price, current price/market value are required",
       "Ticker or ISIN helps identify the asset — include if available",
@@ -1300,7 +1542,7 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
         <span style={{ fontSize: 13, color: C.textSoft, fontWeight: 500 }}>
           Import {guide?.label || "file"} — click to upload
         </span>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>CSV or Excel</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>CSV, Excel or PDF</span>
         <span style={{ fontSize: 14, color: C.muted }}>›</span>
       </div>
     );
@@ -1434,7 +1676,7 @@ function FileUploadCard({ defaultType, onFileReady, readonly }) {
             )}
           </div>
         )}
-        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={onPick} style={{ display: "none" }} />
+        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={onPick} style={{ display: "none" }} />
 
         {uploadError && (
           <div style={{ marginTop: 10, background: C.red + "18", border: `1px solid ${C.red}44`, borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "flex-start", gap: 10 }}>
@@ -2091,7 +2333,7 @@ function GoalContributionCalc({ goal, onSet, onClose }) {
       )}
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <Btn onClick={() => onSet(Math.round(displayContrib / (goal.currency === "EUR" ? EUR_HUF : goal.currency === "USD" ? USD_HUF : 1)))} style={{ flex: 1 }}>
+        <Btn onClick={() => onSet(Math.round(displayContrib / (goal.currency === "EUR" ? RATES.EUR : goal.currency === "USD" ? RATES.USD : 1)))} style={{ flex: 1 }}>
           Set {fmtHUF(displayContrib)}/month
         </Btn>
         <button onClick={onClose} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: "none", color: C.muted, cursor: "pointer", fontSize: 13 }}>Cancel</button>
@@ -2135,6 +2377,11 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
   const [closeForm, setCloseForm] = useState({ exitDate: "", exitPrice: "", qtyToClose: "" });
   const [closedNote, setClosedNote] = useState(null); // { realized, label }
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [detailed, setDetailed] = useState(false); // false = simple (name, value, P&L); true = full breakdown
+
+  // Grid layout differs between the simple and detailed views.
+  const gridCols = detailed ? "2.5fr 1fr 1fr 1fr 1fr 96px" : "2.5fr 1fr 1fr 96px";
+  const headerCells = detailed ? ["Position", "Qty × Price", "Market Value", "Cost Basis", "P&L", ""] : ["Position", "Market Value", "P&L", ""];
 
   function openClose(pos) {
     setClosingPosId(pos.id);
@@ -2260,18 +2507,22 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
             <span style={{ fontSize: 12, color: C.muted }}>{portfolio.positions.length} position{portfolio.positions.length !== 1 ? "s" : ""}</span>
           </div>
         )}
-        {!readonly && !editingPortfolio && (
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => setEditingPortfolio(true)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13 }}>✎</button>
-            <button onClick={deletePortfolio} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 15 }}>×</button>
+        {!editingPortfolio && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button onClick={() => setDetailed(v => !v)} title={detailed ? "Show summary view" : "Show full details"}
+              style={{ background: detailed ? C.accent + "22" : C.surfaceHigh, border: `1px solid ${detailed ? C.accent : C.border}`, borderRadius: 7, padding: "3px 10px", color: detailed ? C.accent : C.muted, fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
+              {detailed ? "Hide details" : "Details"}
+            </button>
+            {!readonly && <button onClick={() => setEditingPortfolio(true)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13 }}>✎</button>}
+            {!readonly && <button onClick={deletePortfolio} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 15 }}>×</button>}
           </div>
         )}
       </div>
 
-      {/* Column headers — fixed last column to match data rows */}
-      <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 96px", gap: 8, padding: "4px 0 8px", borderBottom: `1px solid ${C.border}` }}>
-        {["Position", "Qty × Price", "Market Value", "Cost Basis", "P&L", ""].map(h => (
-          <span key={h} style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
+      {/* Column headers — adapt to simple vs detailed view */}
+      <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 8, padding: "4px 0 8px", borderBottom: `1px solid ${C.border}` }}>
+        {headerCells.map((h, i) => (
+          <span key={i} style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
         ))}
       </div>
 
@@ -2335,18 +2586,18 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
         }
 
         return (
-          <div key={pos.id} style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 96px", gap: 8, alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+          <div key={pos.id} style={{ display: "grid", gridTemplateColumns: gridCols, gap: 8, alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
             <div>
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 2 }}>
-                {pos.ticker && <Tag color={C.blue}>{pos.ticker}</Tag>}
+                {pos.ticker && <Tag color={pos.assetClass === "Cash" ? C.green : C.blue}>{pos.ticker}</Tag>}
                 <span style={{ fontSize: 12, fontWeight: 500 }}>{pos.name}</span>
               </div>
-              <div style={{ fontSize: 10, color: C.muted }}>{pos.assetClass} · {pos.region} · {pos.currency}{pos.purchaseDate ? ` · bought ${pos.purchaseDate}` : ""}</div>
-              {pos.notes && <div style={{ fontSize: 10, color: C.muted, fontStyle: "italic" }}>{pos.notes}</div>}
+              {detailed && <div style={{ fontSize: 10, color: C.muted }}>{pos.assetClass} · {pos.region} · {pos.currency}{pos.purchaseDate ? ` · bought ${pos.purchaseDate}` : ""}</div>}
+              {detailed && pos.notes && <div style={{ fontSize: 10, color: C.muted, fontStyle: "italic" }}>{pos.notes}</div>}
             </div>
-            <span style={{ fontSize: 12, color: C.muted }}>{pos.qty} × {pos.currentPrice}</span>
+            {detailed && <span style={{ fontSize: 12, color: C.muted }}>{pos.qty} × {pos.currentPrice}</span>}
             <span style={{ fontSize: 13, fontWeight: 600 }}>{fmtHUF(marketVal)}</span>
-            <span style={{ fontSize: 12, color: C.muted }}>{costVal > 0 ? fmtHUF(costVal) : "—"}</span>
+            {detailed && <span style={{ fontSize: 12, color: C.muted }}>{costVal > 0 ? fmtHUF(costVal) : "—"}</span>}
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, color: pnlColor }}>{pnl >= 0 ? "+" : ""}{fmtHUF(pnl)}</div>
               <div style={{ fontSize: 10, color: pnlColor }}>{pnl >= 0 ? "+" : ""}{pnlPct}%</div>
@@ -2367,11 +2618,11 @@ function PortfolioCard({ portfolio, data, setData, readonly }) {
 
       {/* Totals row */}
       {portfolio.positions.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 96px", gap: 8, padding: "10px 0 4px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 8, padding: "10px 0 4px" }}>
           <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Total</span>
-          <span />
+          {detailed && <span />}
           <span style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>{fmtHUF(totalMV)}</span>
-          <span style={{ fontSize: 12, color: C.muted }}>{fmtHUF(totalCost)}</span>
+          {detailed && <span style={{ fontSize: 12, color: C.muted }}>{fmtHUF(totalCost)}</span>}
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, color: totalPnl >= 0 ? C.green : C.red }}>{totalPnl >= 0 ? "+" : ""}{fmtHUF(totalPnl)}</div>
             <div style={{ fontSize: 10, color: totalPnl >= 0 ? C.green : C.red }}>{totalPnl >= 0 ? "+" : ""}{totalPnlPct}%</div>
@@ -2559,6 +2810,8 @@ function normalizeData(raw) {
     netWorthHistory: raw.netWorthHistory || [],
     merchantRules: raw.merchantRules || [],
     customCategories: raw.customCategories || [],
+    plannedExpenses: raw.plannedExpenses || [],
+    displayCurrency: raw.displayCurrency || "HUF",
   };
 }
 
@@ -2596,6 +2849,37 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
   const [editingCashId, setEditingCashId] = useState(null);
   const [confirmDeleteREId, setConfirmDeleteREId] = useState(null);
   const [confirmDeleteCashId, setConfirmDeleteCashId] = useState(null);
+  const [priceStatus, setPriceStatus] = useState(null); // { loading, msg, error }
+
+  // Apply live prices to every position with a ticker (skips Cash lines).
+  async function refreshPrices(force = false) {
+    const apiKey = getPriceApiKey();
+    const tickers = data.portfolios.flatMap(p => p.positions).filter(pos => pos.assetClass !== "Cash").map(pos => pos.ticker).filter(Boolean);
+    if (!apiKey) { setPriceStatus({ error: true, msg: "Add a free price API key in ⚙ Settings to enable live prices." }); return; }
+    if (!tickers.length) { setPriceStatus({ error: true, msg: "No tickers to price — add tickers to your positions first." }); return; }
+    setPriceStatus({ loading: true, msg: "Fetching latest prices…" });
+    const r = await fetchLivePrices(tickers, apiKey, { force });
+    if (!r || !r.fetched.length) { setPriceStatus({ error: true, msg: "Couldn't fetch prices — check your API key or daily quota." }); return; }
+    setData(d => ({
+      ...d,
+      portfolios: d.portfolios.map(p => ({
+        ...p,
+        positions: p.positions.map(pos => (r.prices[pos.ticker] != null ? { ...pos, currentPrice: r.prices[pos.ticker] } : pos)),
+      })),
+    }));
+    const miss = r.missing.length ? ` · ${r.missing.length} not found (${r.missing.slice(0, 4).join(", ")}${r.missing.length > 4 ? "…" : ""})` : "";
+    setPriceStatus({ msg: `Updated ${r.fetched.length} price${r.fetched.length === 1 ? "" : "s"} · ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}${miss}` });
+  }
+
+  // Auto-refresh once per day if a key is set and the cache is stale.
+  useEffect(() => {
+    if (readonly) return;
+    const apiKey = getPriceApiKey();
+    if (!apiKey) return;
+    let stale = true;
+    try { const c = JSON.parse(localStorage.getItem("pfa_prices_v1") || "null"); stale = !c || c.date !== todayStr(); } catch {}
+    if (stale) refreshPrices(false);
+  }, []);
 
   const allPositions = data.portfolios.flatMap(p =>
     p.positions.map(pos => ({ ...pos, portfolioName: p.name }))
@@ -2850,6 +3134,22 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
           )}
         </div>
       </Card>
+
+      {/* ══════ LIVE PRICES CONTROL ══════ */}
+      {allPositions.length > 0 && (
+        <Card style={{ padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12, color: priceStatus?.error ? C.orange : C.muted }}>
+            {priceStatus?.loading ? "⟳ " : "📈 "}
+            {priceStatus?.msg || "Track live market prices for your tickers. Prices are fetched in each instrument's listing currency, cached daily."}
+          </div>
+          {!readonly && (
+            <button onClick={() => refreshPrices(true)} disabled={priceStatus?.loading}
+              style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 14px", color: C.text, fontSize: 12, fontWeight: 600, cursor: priceStatus?.loading ? "default" : "pointer", flexShrink: 0 }}>
+              {priceStatus?.loading ? "Refreshing…" : "↻ Refresh prices"}
+            </button>
+          )}
+        </Card>
+      )}
 
       {/* ══════ TOTAL VIEW ══════ */}
       {portfolioView === "total" && (<>
@@ -3685,6 +3985,13 @@ Once the user provides a monthly contribution, output:
 IMPORT_BATCH:
 {"type":"savings_goals","summary":"New savings goal","items":[{"name":"string","targetAmount":number,"currentAmount":number,"monthlyContribution":number,"currency":"HUF"|"EUR"|"USD","targetDate":"YYYY-MM-DD"|"","notes":"string"}]}
 
+━━ PLANNED / UPCOMING EXPENSES ━━
+If the user describes a future one-off outlay to plan for (e.g. "plan a 2M HUF kitchen renovation in October", "save up for 500k dental work next spring"), output:
+
+IMPORT_BATCH:
+{"type":"planned_expenses","summary":"New planned expense","items":[{"name":"string","amount":number,"currency":"HUF"|"EUR"|"USD","date":"YYYY-MM-DD"|"","category":"Housing"|"Health"|"Transport"|"Education"|"Garden"|"Other","notes":"string"}]}
+  - amount is always POSITIVE. If only a month is given, use the 1st of that month.
+
 ━━ CATEGORY INFERENCE ━━
 Lidl/Aldi/Spar/Tesco/Penny/market/zöldséges/étterem/pizza/kebab/food → Food
 BKK/Volán/MÁV/Uber/Bolt/taxi/fuel/MOL/Shell/OMV/parking → Transport
@@ -4121,8 +4428,25 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   // When a file arrives from a tab upload card, pre-load it
   useEffect(() => {
     if (!pendingImport) return;
-    setAttachedFile({ name: pendingImport.name, text: pendingImport.text });
-    setFileType(pendingImport.fileType);
+    const text = pendingImport.text || "";
+    const learnedRules = buildLearnedRules(data.transactions || [], data.merchantRules || []);
+    // Try client-side parsers first so common formats skip the Claude round-trip.
+    const lyBatch = tryParseLightyearCSV(text);
+    const revRows = lyBatch ? null : tryParseRevolutCSV(text, learnedRules);
+    if (lyBatch) {
+      setMessages(m => [...m, { role: "user", content: `📎 ${pendingImport.name} [Investment export]` }]);
+      setMessages(m => [...m, { role: "assistant", content: `Detected a Lightyear statement — ${lyBatch.summary}. Live prices will fill in current values; review and confirm below.` }]);
+      setPendingBatch({ ...lyBatch, duplicates: lyBatch.items.map(() => false), checked: lyBatch.items.map(() => true) });
+    } else if (revRows && revRows.length > 0) {
+      const dups = markDuplicates(revRows, data.transactions || []);
+      const dupCount = dups.filter(Boolean).length;
+      setMessages(m => [...m, { role: "user", content: `📎 ${pendingImport.name} [Bank statement]` }]);
+      setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${revRows.length} transactions.${dupCount ? ` ${dupCount} look like duplicates and were pre-unchecked.` : ""} Review and confirm below.` }]);
+      setPendingBatch({ type: "transactions", summary: `${revRows.length} transactions from ${pendingImport.name}`, items: revRows, duplicates: dups, checked: dups.map(d => !d) });
+    } else {
+      setAttachedFile({ name: pendingImport.name, text: pendingImport.text });
+      setFileType(pendingImport.fileType);
+    }
     setMinimized(false);
     clearPendingImport?.();
   }, [pendingImport]);
@@ -4182,6 +4506,15 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
       }
 
       const text = await fileToText(file);
+      // ── CSV: try Lightyear investment statement (reconstruct positions) ──
+      const lyBatch = tryParseLightyearCSV(text);
+      if (lyBatch) {
+        setMessages(m => [...m, { role: "user", content: `📎 ${file.name} [Investment export]` }]);
+        setMessages(m => [...m, { role: "assistant", content: `Detected a Lightyear statement — ${lyBatch.summary}. Live prices will fill in current values; review and confirm below.` }]);
+        setPendingBatch({ ...lyBatch, duplicates: lyBatch.items.map(() => false), checked: lyBatch.items.map(() => true) });
+        e.target.value = "";
+        return;
+      }
       // ── CSV: try Revolut direct parse (bypasses Claude token limits entirely) ──
       const revRows = tryParseRevolutCSV(text, learnedRules);
       if (revRows && revRows.length > 0) {
@@ -4346,13 +4679,25 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
           ...selected.map(item => ({ ...item, id: `sg_${Date.now()}_${Math.random().toString(36).slice(2)}` }))
         ]
       }));
+    } else if (pendingBatch.type === "planned_expenses") {
+      setData(d => ({
+        ...d,
+        plannedExpenses: [
+          ...(d.plannedExpenses || []),
+          ...selected.map(item => ({
+            id: `pe_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            name: item.name, amount: parseFloat(item.amount) || 0, currency: item.currency || "HUF",
+            date: item.date || "", category: item.category || "Other", notes: item.notes || "",
+          }))
+        ]
+      }));
     }
 
     setPendingBatch(null);
     setMessages(m => [...m, { role: "assistant", content: `✓ Imported ${count} ${pendingBatch.type}. Data updated.` }]);
   }
 
-  const batchColor = { transactions: C.blue, costs: C.purple, positions: C.green, budget_targets: C.accent, savings_goals: C.orange };
+  const batchColor = { transactions: C.blue, costs: C.purple, positions: C.green, budget_targets: C.accent, savings_goals: C.orange, planned_expenses: C.orange };
 
   return (
     <div style={{ position: "fixed", bottom: isMobile ? 0 : 28, right: isMobile ? 0 : 28, left: isMobile ? 0 : "auto", top: isMobile ? 0 : "auto", width: isMobile ? "100%" : 430, height: isMobile ? "100%" : 620, background: C.surface, border: isMobile ? "none" : `1px solid ${C.border}`, borderRadius: isMobile ? 0 : 16, display: "flex", flexDirection: "column", zIndex: 100, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
@@ -4562,7 +4907,7 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
 
       {/* Input row */}
       <div style={{ padding: "10px 12px 14px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFileSelect} style={{ display: "none" }} />
+        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={handleFileSelect} style={{ display: "none" }} />
         <button
           onClick={() => !readonly && fileInputRef.current?.click()}
           disabled={readonly}
@@ -4868,6 +5213,137 @@ function Dashboard({ data, setTab, viewMonth, onOpenChat }) {
 }
 
 // ─── Cash Flow & Expenses Tab (merged) ────────────────────────────────────────
+// ─── Planned / Upcoming Expenses ──────────────────────────────────────────────
+// Plan one-off future outlays (renovation, health, etc.) and check whether your
+// liquid capital (cash) covers them. Lives on the Cash flow tab.
+const EMPTY_PLANNED = { name: "", amount: "", currency: "HUF", date: "", category: "Other", notes: "" };
+function PlannedExpenses({ data, setData, readonly }) {
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(EMPTY_PLANNED);
+  const items = [...(data.plannedExpenses || [])].sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
+
+  const today = todayStr();
+  const totalPlanned = items.reduce((s, p) => s + toHUF(parseFloat(p.amount) || 0, p.currency), 0);
+  const next3 = items.filter(p => p.date && p.date <= addMonthsISO(today, 3)).reduce((s, p) => s + toHUF(parseFloat(p.amount) || 0, p.currency), 0);
+  const liquidCapital = (data.cashAccounts || []).reduce((s, a) => s + toHUF(a.balance, a.currency), 0);
+  const shortfall = totalPlanned - liquidCapital;
+
+  function save() {
+    if (!form.name || !form.amount) return;
+    const entry = { name: form.name, amount: parseFloat(form.amount), currency: form.currency, date: form.date || "", category: form.category, notes: form.notes || "" };
+    if (editingId) {
+      setData(d => ({ ...d, plannedExpenses: (d.plannedExpenses || []).map(p => p.id === editingId ? { ...p, ...entry } : p) }));
+    } else {
+      setData(d => ({ ...d, plannedExpenses: [...(d.plannedExpenses || []), { id: `pe_${Date.now()}`, ...entry }] }));
+    }
+    setForm(EMPTY_PLANNED); setAdding(false); setEditingId(null);
+  }
+  function startEdit(p) {
+    setForm({ name: p.name, amount: String(p.amount), currency: p.currency || "HUF", date: p.date || "", category: p.category || "Other", notes: p.notes || "" });
+    setEditingId(p.id); setAdding(true);
+  }
+  function remove(id) { setData(d => ({ ...d, plannedExpenses: (d.plannedExpenses || []).filter(p => p.id !== id) })); }
+
+  const cats = ["Housing", "Health", "Transport", "Education", "Garden", "Other"];
+  const F = (
+    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, marginTop: 10 }}>
+      <div style={{ fontWeight: 600, fontSize: 12, color: C.accent, marginBottom: 10 }}>{editingId ? "Edit planned expense" : "Add planned expense"}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <Inp value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="e.g. Kitchen renovation" />
+        <Inp value={form.amount} onChange={v => setForm(f => ({ ...f, amount: v }))} placeholder="Amount" type="number" />
+        <Sel value={form.currency} onChange={v => setForm(f => ({ ...f, currency: v }))} options={["HUF", "EUR", "USD"]} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 8, marginBottom: 10 }}>
+        <Inp value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} type="date" />
+        <Sel value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={cats} />
+        <Inp value={form.notes} onChange={v => setForm(f => ({ ...f, notes: v }))} placeholder="Notes (optional)" />
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn onClick={save} disabled={!form.name || !form.amount}>{editingId ? "Save" : "Add"}</Btn>
+        <Btn variant="ghost" onClick={() => { setForm(EMPTY_PLANNED); setAdding(false); setEditingId(null); }}>Cancel</Btn>
+      </div>
+    </div>
+  );
+
+  return (
+    <Card>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <div>
+          <div style={{ fontWeight: 600 }}>Planned / Upcoming Expenses</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>Set aside capital for renovations, health and other one-off outlays</div>
+        </div>
+        {!readonly && !adding && (
+          <button onClick={() => { setForm(EMPTY_PLANNED); setEditingId(null); setAdding(true); }}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "5px 12px", color: C.muted, fontSize: 12, cursor: "pointer" }}>
+            + Add
+          </button>
+        )}
+      </div>
+
+      {items.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, margin: "12px 0" }}>
+          <div style={{ background: C.surfaceHigh, borderRadius: 8, padding: "8px 12px" }}>
+            <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>Total planned</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.orange }}>{fmtHUF(totalPlanned)}</div>
+          </div>
+          <div style={{ background: C.surfaceHigh, borderRadius: 8, padding: "8px 12px" }}>
+            <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>Next 3 months</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{fmtHUF(next3)}</div>
+          </div>
+          <div style={{ background: C.surfaceHigh, borderRadius: 8, padding: "8px 12px" }}>
+            <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase" }}>Cash on hand</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.green }}>{fmtHUF(liquidCapital)}</div>
+          </div>
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div style={{ background: shortfall > 0 ? C.red + "14" : C.green + "14", border: `1px solid ${shortfall > 0 ? C.red : C.green}44`, borderRadius: 8, padding: "9px 13px", fontSize: 12, marginBottom: 12 }}>
+          {shortfall > 0
+            ? <>⚠ Your cash covers part of your plans — <strong style={{ color: C.red }}>{fmtHUF(shortfall)}</strong> short of the <strong>{fmtHUF(totalPlanned)}</strong> total. Consider funding a savings goal or trimming the timeline.</>
+            : <>✓ Your cash on hand covers all planned expenses, with <strong style={{ color: C.green }}>{fmtHUF(-shortfall)}</strong> to spare.</>}
+        </div>
+      )}
+
+      {items.map(p => {
+        const amtHUF = toHUF(parseFloat(p.amount) || 0, p.currency);
+        const when = p.date ? new Date(p.date + "T00:00:00") : null;
+        const monthsAway = when ? Math.round((when - new Date(today + "T00:00:00")) / (30.44 * 86400000)) : null;
+        return (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, fontWeight: 500 }}>{p.name}</span>
+                <Tag color={C.muted}>{p.category}</Tag>
+              </div>
+              <div style={{ fontSize: 11, color: C.muted }}>
+                {p.date ? `${p.date}${monthsAway !== null ? ` · ${monthsAway <= 0 ? "due" : `in ~${monthsAway} mo`}` : ""}` : "no date set"}
+                {p.notes ? ` · ${p.notes}` : ""}
+              </div>
+            </div>
+            <span style={{ fontSize: 13, fontWeight: 600, color: C.orange, flexShrink: 0 }}>{fmtHUF(amtHUF)}</span>
+            {!readonly && (
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button onClick={() => startEdit(p)} title="Edit" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>✎</button>
+                <button onClick={() => remove(p.id)} title="Delete" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {items.length === 0 && !adding && (
+        <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "20px 0" }}>
+          Nothing planned yet.<br /><span style={{ fontSize: 12 }}>Add an upcoming expense, or tell the chat e.g. "plan a 2M HUF renovation in October".</span>
+        </div>
+      )}
+
+      {adding && !readonly && F}
+    </Card>
+  );
+}
+
 function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpenUpload, viewMonth }) {
   const isMobile = useIsMobile();
   const now = new Date();
@@ -4904,20 +5380,40 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
   const [billForm, setBillForm] = useState({ name: "", category: "Housing", amount: "", currency: "HUF", type: "recurring", frequency: "monthly", owner: "Joint", nextDue: "", notes: "" });
 
   // ── Computed data ──
+  // "Transfer" = money moving between the owner's own accounts. Excluded from
+  // income/expense totals so the cash-flow figures reflect real money in/out.
+  const isFlow = t => t.category !== "Transfer";
+  const [showAvg, setShowAvg] = useState(false);
+
   const allMonths = [...new Set(data.transactions.map(t => t.date?.slice(0, 7)).filter(Boolean))].sort();
   const monthTxns = data.transactions.filter(t => t.date?.startsWith(viewMonth));
-  const income = monthTxns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
-  const expenses = monthTxns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+  const income = monthTxns.filter(t => t.type === "income" && isFlow(t)).reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+  const expenses = monthTxns.filter(t => t.type === "expense" && isFlow(t)).reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
   const net = income - expenses;
   const savingsRate = income > 0 ? Math.round((net / income) * 100) : null;
 
   const monthlySummary = allMonths.map(ym => {
     const txns = data.transactions.filter(t => t.date?.startsWith(ym));
-    const inc = txns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
-    const exp = txns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+    const inc = txns.filter(t => t.type === "income" && isFlow(t)).reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+    const exp = txns.filter(t => t.type === "expense" && isFlow(t)).reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
     const [y, m] = ym.split("-").map(Number);
     return { month: new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "short", year: "2-digit" }), income: Math.round(inc), expenses: Math.round(exp) };
   });
+
+  // Averages over months that actually have cash-flow activity (not transfer-only).
+  const monthsWithFlow = monthlySummary.filter(m => m.income > 0 || m.expenses > 0);
+  const avgN = monthsWithFlow.length || 1;
+  const avgIncome = monthsWithFlow.reduce((s, m) => s + m.income, 0) / avgN;
+  const avgExpenses = monthsWithFlow.reduce((s, m) => s + m.expenses, 0) / avgN;
+  const avgNet = avgIncome - avgExpenses;
+  const avgSavingsRate = avgIncome > 0 ? Math.round((avgNet / avgIncome) * 100) : null;
+
+  // What the stat tiles show, depending on the monthly/average toggle.
+  const tileIncome = showAvg ? avgIncome : income;
+  const tileExpenses = showAvg ? avgExpenses : expenses;
+  const tileNet = showAvg ? avgNet : net;
+  const tileSavingsRate = showAvg ? avgSavingsRate : savingsRate;
+  const tileSuffix = showAvg ? ` · avg of ${monthsWithFlow.length} month${monthsWithFlow.length === 1 ? "" : "s"}` : "";
 
   const byCategory = allCategories(data).filter(c => c !== "Income" && c !== "Transfer").map(cat => ({
     name: cat,
@@ -4926,7 +5422,7 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
 
   const cumulativeData = (() => {
     const dayTotals = {};
-    monthTxns.forEach(t => {
+    monthTxns.filter(isFlow).forEach(t => {
       const day = t.date?.slice(8, 10); if (!day) return;
       const val = t.type === "income" ? toHUF(t.amount, t.currency) : -toHUF(Math.abs(t.amount), t.currency);
       dayTotals[day] = (dayTotals[day] || 0) + val;
@@ -5030,15 +5526,29 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
         </Card>
       )}
 
+      {/* ── Monthly / average toggle ── */}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginTop: -4 }}>
+        <span style={{ fontSize: 11, color: C.muted }}>Transfers between your own accounts are excluded.</span>
+        <div style={{ display: "flex", background: C.surfaceHigh, borderRadius: 8, padding: 3, gap: 2 }}>
+          {[["false", "This month"], ["true", "Monthly average"]].map(([v, lbl]) => (
+            <button key={v} onClick={() => setShowAvg(v === "true")}
+              style={{ padding: "4px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600,
+                background: String(showAvg) === v ? C.accent : "transparent", color: String(showAvg) === v ? "#000" : C.muted }}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* ── Stat tiles ── */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 12 }}>
-        <Card><Stat label="Income" value={`+${fmtHUF(income)}`} color={C.green} /></Card>
-        <Card><Stat label="Expenses" value={`−${fmtHUF(expenses)}`} color={C.red} /></Card>
-        <Card><Stat label="Net" value={`${net >= 0 ? "+" : "−"}${fmtHUF(Math.abs(net))}`} color={net >= 0 ? C.green : C.red} /></Card>
+        <Card><Stat label={showAvg ? "Avg income" : "Income"} value={`+${fmtHUF(tileIncome)}`} color={C.green} />{tileSuffix && <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 3 }}>{tileSuffix.replace(" · ", "")}</div>}</Card>
+        <Card><Stat label={showAvg ? "Avg expenses" : "Expenses"} value={`−${fmtHUF(tileExpenses)}`} color={C.red} /></Card>
+        <Card><Stat label={showAvg ? "Avg net" : "Net"} value={`${tileNet >= 0 ? "+" : "−"}${fmtHUF(Math.abs(tileNet))}`} color={tileNet >= 0 ? C.green : C.red} /></Card>
         <Card>
-          <Stat label="Savings Rate" value={savingsRate !== null ? `${savingsRate}%` : "—"}
-            color={savingsRate === null ? C.muted : savingsRate >= 20 ? C.green : savingsRate > 0 ? C.orange : C.red} />
-          {savingsRate !== null && <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 3 }}>of income saved</div>}
+          <Stat label="Savings Rate" value={tileSavingsRate !== null ? `${tileSavingsRate}%` : "—"}
+            color={tileSavingsRate === null ? C.muted : tileSavingsRate >= 20 ? C.green : tileSavingsRate > 0 ? C.orange : C.red} />
+          {tileSavingsRate !== null && <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 3 }}>of income saved</div>}
         </Card>
       </div>
 
@@ -5073,6 +5583,9 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
           </Card>
         );
       })()}
+
+      {/* ── Planned / upcoming expenses ── */}
+      <PlannedExpenses data={data} setData={setData} readonly={readonly} />
 
       {/* ── Monthly overview (all months) ── */}
       {monthlySummary.length > 1 && (
@@ -5384,6 +5897,18 @@ function AppInner() {
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   Object.assign(C, darkMode ? DARK_C : LIGHT_C);
 
+  // Live FX rates (ECB via frankfurter.app) — fetched once per day, cached.
+  const [fxRates, setFxRates] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("pfa_fx_v1") || "null"); } catch { return null; }
+  });
+  useEffect(() => { fetchFXRates().then(r => { if (r) setFxRates(r); }); }, []);
+  if (fxRates && fxRates.EUR && fxRates.USD) { RATES.EUR = fxRates.EUR; RATES.USD = fxRates.USD; }
+
+  // Display currency — persisted locally (instant) and to the household record (cross-device).
+  const [displayCurOverride, setDisplayCurOverride] = useState(() => {
+    try { return localStorage.getItem("pfa_disp_cur"); } catch { return null; }
+  });
+
   // Global month picker
   const _now = new Date();
   const _thisMonth = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}`;
@@ -5480,6 +6005,15 @@ function AppInner() {
   function setData(updater) { if (isDemo) return; setDataRaw(updater); }
   async function signOut() { await supabase.auth.signOut(); setIsDemo(false); setDataRaw(EMPTY_DATA); setHouseholdId(null); }
 
+  // Resolve + apply the display currency for this render (used by fmtHUF everywhere).
+  const displayCur = displayCurOverride || data.displayCurrency || "HUF";
+  DISPLAY.cur = displayCur;
+  function changeDisplayCur(c) {
+    setDisplayCurOverride(c);
+    try { localStorage.setItem("pfa_disp_cur", c); } catch {}
+    if (!isDemo) setData(d => ({ ...d, displayCurrency: c }));
+  }
+
   useEffect(() => {
     if (!householdId || isDemo) return;
     maybeSnapshotNW(data, setData);
@@ -5561,6 +6095,11 @@ function AppInner() {
               ⚙
             </button>
           )}
+          <select value={displayCur} onChange={e => changeDisplayCur(e.target.value)}
+            title={`Display currency${fxRates ? ` · EUR ${Math.round(RATES.EUR)} / USD ${Math.round(RATES.USD)} Ft` : " · using fallback rates"}`}
+            style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 8px", cursor: "pointer", fontSize: 12, color: C.text, lineHeight: 1, fontWeight: 600, outline: "none" }}>
+            {["HUF", "EUR", "USD"].map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
           <button onClick={() => setDarkMode(d => !d)} title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
             style={{ background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 14, color: C.muted, lineHeight: 1 }}>
             {darkMode ? "☀" : "🌙"}
