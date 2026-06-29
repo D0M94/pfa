@@ -671,6 +671,64 @@ function buildPositionsFromSchema(sheets, schema, fileName) {
   return { type: "positions", portfolioName: base, broker: "", summary: `${items.length} holding${items.length === 1 ? "" : "s"} parsed from ${fileName || "file"}`, items };
 }
 
+// ─── Erste "Instrumentum bekerülés" holdings report (Crystal Reports .xls) ─────
+// Quirky layout: title + metadata rows, header on a lower row, MERGED cells that
+// shift values out of line with their header, several purchase-lot rows per
+// instrument with subtotal rows, group labels, totals/footer, no ISIN/ticker, and
+// cost in EUR while some market prices are in USD. We read each value as the
+// nearest numeric to its header, aggregate lots per instrument (weighted-avg
+// cost), and convert the market price into the cost currency. Returns a positions
+// batch or null.
+function tryParseErsteHoldingsXLS(text) {
+  const convert = (amt, from, to) => { if (!from || !to || from === to) return amt; const huf = toHUF(amt, from); return to === "EUR" ? huf / RATES.EUR : to === "USD" ? huf / RATES.USD : huf; };
+  const sheets = parseDelimitedToSheets(text);
+  for (const sh of sheets) {
+    const rows = sh.rows;
+    let h = -1;
+    for (let r = 0; r < Math.min(rows.length, 15); r++) {
+      const nn = rows[r].map(_norm);
+      if (nn.includes("instrumentum") && nn.some(x => x.includes("darabsz"))) { h = r; break; }
+    }
+    if (h < 0) continue;
+    const hdr = rows[h].map(_norm);
+    const idxOf = pred => hdr.findIndex(pred);
+    const nameCol = idxOf(x => x === "instrumentum");
+    const qtyCol = idxOf(x => x.includes("darabsz"));
+    const costCol = idxOf(x => x.includes("bekerar"));   // "Beker. ár" — purchase price/unit
+    const mktCol = idxOf(x => x.includes("piaciar"));     // "Piaci ár" — market price/unit
+    const typeCol = idxOf(x => x === "ve" || x.includes("vetel"));
+    const numNear = (row, idx) => { if (idx < 0) return { n: NaN, at: -1 }; for (let j = idx; j <= idx + 2 && j < row.length; j++) { const n = parseLooseNum(row[j]); if (!isNaN(n)) return { n, at: j }; } return { n: NaN, at: -1 }; };
+    const ccyAfter = (row, at) => { for (let j = at + 1; j <= at + 2 && j < row.length; j++) { const c = normCcy(row[j], null); if (c) return c; } return null; };
+    const FOOT = /^(osszesen|felhivjuk|total|mindosszesen|vegosszeg|egyenleg)/;
+    const agg = {}; let group = null;
+    for (let r = h + 1; r < rows.length; r++) {
+      const row = rows[r]; const name = (row[nameCol] || "").trim();
+      if (!name) continue; // subtotal / blank row
+      if (FOOT.test(_norm(name))) continue;
+      const q = numNear(row, qtyCol);
+      if (isNaN(q.n) || q.n === 0) { if (_norm(name).length > 2 && !group) group = name; continue; } // group label
+      const c = numNear(row, costCol), m = numNear(row, mktCol);
+      const costCcy = ccyAfter(row, c.at) || "EUR";
+      const mktCcy = ccyAfter(row, m.at) || costCcy;
+      const sign = /elad/.test(_norm(row[typeCol] || "")) ? -1 : 1;
+      const a = agg[name] || (agg[name] = { name, qty: 0, costSum: 0, costCcy, mkt: NaN, mktCcy });
+      a.qty += sign * q.n;
+      a.costSum += sign * q.n * (isNaN(c.n) ? 0 : c.n);
+      if (!isNaN(m.n)) { a.mkt = m.n; a.mktCcy = mktCcy; }
+    }
+    const items = [];
+    for (const k of Object.keys(agg)) {
+      const a = agg[k];
+      if (a.qty <= 1e-9) continue;
+      const cb = a.costSum / a.qty;
+      const cp = isNaN(a.mkt) ? cb : convert(a.mkt, a.mktCcy, a.costCcy);
+      items.push({ name: a.name, ticker: "", isin: "", qty: +a.qty.toFixed(6), costBasis: +cb.toFixed(6), currentPrice: +cp.toFixed(6), currency: a.costCcy, assetClass: "ETF", region: "Global", notes: "Imported from Erste" });
+    }
+    if (items.length) return { type: "positions", portfolioName: group || "Erste", broker: "Erste", summary: `${items.length} holding${items.length === 1 ? "" : "s"} from Erste report`, items };
+  }
+  return null;
+}
+
 // ─── Default Data ─────────────────────────────────────────────────────────────
 const EMPTY_DATA = {
   costs: [], transactions: [], portfolios: [], realEstate: [],
@@ -4675,6 +4733,14 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
     setLoading(true);
     let sheets = [];
     try {
+      // 0) Dedicated Erste "Instrumentum bekerülés" report (Crystal Reports layout).
+      const erste = tryParseErsteHoldingsXLS(text);
+      if (erste && erste.items.length) {
+        setMessages(m => [...m, { role: "assistant", content: `Detected an Erste holdings report — aggregated ${erste.items.length} holding${erste.items.length === 1 ? "" : "s"} (purchase lots merged, prices converted to ${erste.items[0].currency}). Note: Erste's report has no ISIN/ticker, so live prices can't auto-update these unless you add a ticker. Review and confirm below.` }]);
+        setPendingBatch({ ...erste, duplicates: erste.items.map(() => false), checked: erste.items.map(() => true) });
+        setLoading(false);
+        return;
+      }
       sheets = parseDelimitedToSheets(text);
       // 1) Fast keyword detection (Hungarian + English headers, no AI round-trip).
       let schema = heuristicSchema(sheets);
