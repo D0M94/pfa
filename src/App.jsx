@@ -96,28 +96,30 @@ function addMonthsISO(iso, n) {
 // ─── Live asset prices (Twelve Data — free tier, CORS-friendly) ───────────────
 // Data-efficient: one batched request for all tickers, results cached for the day
 // in localStorage so re-opening the app or switching tabs costs no API calls.
-// Prices come from YOUR backend proxy at /api/prices, which holds the Twelve Data
-// key server-side (see api/prices.js) so it is never exposed in the browser and a
-// shared server cache keeps quota use to ~1 upstream call per ticker per day.
+// Prices come from YOUR backend proxy at /api/prices (see api/prices.js), which
+// resolves each holding by ISIN/ticker to the right listing, fetches the quote,
+// and converts it into the holding's own currency. `items` is [{ticker,isin,currency}].
 // If the endpoint is not deployed the app simply keeps manually entered prices.
-async function fetchLivePrices(tickers, { force = false } = {}) {
-  const uniq = [...new Set((tickers || []).filter(Boolean))];
+async function fetchLivePrices(items, { force = false } = {}) {
+  const list = (items || []).filter(it => it && it.ticker);
+  const seen = new Set(), uniq = [];
+  for (const it of list) { if (!seen.has(it.ticker)) { seen.add(it.ticker); uniq.push(it); } }
   if (!uniq.length) return null;
   const today = new Date().toISOString().slice(0, 10);
   let cache = {};
   try { const c = JSON.parse(localStorage.getItem("pfa_prices_v1") || "null"); if (c && c.date === today && !force) cache = c.prices || {}; } catch {}
-  const need = uniq.filter(t => cache[t] == null);
+  const need = uniq.filter(it => cache[it.ticker] == null);
   if (need.length) {
     try {
-      const res = await fetch(`/api/prices?symbols=${encodeURIComponent(need.join(","))}${force ? "&force=1" : ""}`);
+      const res = await fetch("/api/prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items: need, force }) });
       const j = await res.json();
-      const got = (j && j.prices) || j || {};
-      for (const t of need) { const v = got[t]; if (v != null && !isNaN(parseFloat(v))) cache[t] = parseFloat(v); }
+      const got = (j && j.prices) || {};
+      for (const it of need) { const v = got[it.ticker]; if (v != null && !isNaN(parseFloat(v))) cache[it.ticker] = parseFloat(v); }
       try { localStorage.setItem("pfa_prices_v1", JSON.stringify({ date: today, prices: cache })); } catch {}
-    } catch { /* endpoint/network error — fall through with whatever is cached */ }
+    } catch { /* endpoint/network error — keep whatever is cached */ }
   }
   const prices = {}, missing = [];
-  for (const t of uniq) { if (cache[t] != null && !isNaN(cache[t])) prices[t] = cache[t]; else missing.push(t); }
+  for (const it of uniq) { if (cache[it.ticker] != null && !isNaN(cache[it.ticker])) prices[it.ticker] = cache[it.ticker]; else missing.push(it.ticker); }
   return { prices, missing, fetched: Object.keys(prices) };
 }
 
@@ -482,6 +484,124 @@ async function fileToText(file) {
     }).join("\n\n");
   }
   throw new Error("Unsupported file type. Please upload .csv, .xlsx, .xls or .pdf");
+}
+
+// ─── AI-assisted investment import (column auto-detection) ────────────────────
+// Robust path for arbitrary broker/bank holdings exports:
+//   1) split the file into sheets+rows (handles CSV and the XLSX→text format),
+//   2) ask the AI to map columns→roles from a SMALL sample (cheap, bounded),
+//   3) parse ALL rows locally with that mapping (no row-count token limits).
+function _csvSplit(line) {
+  const out = []; let cur = "", q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+    else if (ch === "," && !q) { out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur); return out.map(s => s.trim());
+}
+function parseDelimitedToSheets(text) {
+  const t = String(text || "");
+  if (t.includes("--- Sheet:")) {
+    const parts = t.split(/^--- Sheet:\s*(.*?)\s*---$/m); // ["", name1, body1, name2, body2, ...]
+    const sheets = [];
+    for (let i = 1; i < parts.length; i += 2) {
+      const name = parts[i] || `Sheet${(i + 1) / 2}`;
+      const rows = (parts[i + 1] || "").split(/\r?\n/).filter(l => l.length).map(_csvSplit);
+      if (rows.length) sheets.push({ name, rows });
+    }
+    if (sheets.length) return sheets;
+  }
+  const rows = t.split(/\r?\n/).filter(l => l.length).map(_csvSplit);
+  return [{ name: "Sheet1", rows }];
+}
+// Locale-tolerant number parser: handles "1.234,56", "1,234.56", "1 234,5", "(123)".
+function parseLooseNum(v) {
+  if (v == null) return NaN;
+  let s = String(v).trim();
+  const neg = /^\(.*\)$/.test(s) || /-/.test(s);
+  s = s.replace(/[^0-9.,]/g, "");
+  if (!s) return NaN;
+  const c = s.includes(","), d = s.includes(".");
+  if (c && d) { if (s.lastIndexOf(",") > s.lastIndexOf(".")) s = s.replace(/\./g, "").replace(",", "."); else s = s.replace(/,/g, ""); }
+  else if (c) { const p = s.split(","); if (p.length === 2 && p[1].length <= 2) s = p[0] + "." + p[1]; else s = s.replace(/,/g, ""); }
+  const n = parseFloat(s);
+  if (isNaN(n)) return NaN;
+  return neg ? -Math.abs(n) : n;
+}
+function normCcy(s, fallback) {
+  const u = String(s || "").toUpperCase();
+  if (/\bEUR\b|€/.test(u)) return "EUR";
+  if (/\bUSD\b|\$/.test(u)) return "USD";
+  if (/\bHUF\b|\bFT\b/.test(u)) return "HUF";
+  if (/\bGBP\b|£|GBX/.test(u)) return "GBP";
+  const m = u.match(/[A-Z]{3}/);
+  return m ? m[0] : (fallback || "EUR");
+}
+function extractJSONObject(text) {
+  const i = String(text || "").indexOf("{");
+  if (i < 0) return null;
+  let depth = 0;
+  for (let j = i; j < text.length; j++) {
+    if (text[j] === "{") depth++;
+    else if (text[j] === "}") { depth--; if (depth === 0) { try { return JSON.parse(text.slice(i, j + 1)); } catch { return null; } } }
+  }
+  return null;
+}
+function buildSchemaSample(sheets) {
+  return sheets.slice(0, 4).map((sh, si) =>
+    `### Sheet index ${si} — name "${sh.name}" (${sh.rows.length} rows total)\n` +
+    sh.rows.slice(0, 16).map((r, ri) => `r${ri}: ` + r.slice(0, 30).map(c => String(c == null ? "" : c).slice(0, 40)).join(" | ")).join("\n")
+  ).join("\n\n");
+}
+const SCHEMA_SYSTEM = `You map columns in an investment / brokerage holdings export so a program can parse it.
+Return ONLY a JSON object (no prose, no markdown fences):
+{"sheetIndex": <int>, "headerRow": <int, 0-based row index of the header within that sheet>, "columns": {"name": <int|null>, "ticker": <int|null>, "isin": <int|null>, "quantity": <int|null>, "costPrice": <int|null>, "currentPrice": <int|null>, "marketValue": <int|null>, "currency": <int|null>, "assetClass": <int|null>}, "globalCurrency": <"EUR"|"USD"|"HUF"|"GBP"|null>}
+Column values are 0-based column indices in the chosen sheet; use null when a field is absent.
+Definitions: quantity = number of shares/units held; costPrice = purchase/average price per unit; currentPrice = latest price per unit; marketValue = current total value of the position. Choose the sheet that actually lists the holdings. If one currency applies to the whole file, set globalCurrency.`;
+async function aiDetectInvestmentSchema(sheets) {
+  const res = await fetch("/api/chat", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 700, system: SCHEMA_SYSTEM, messages: [{ role: "user", content: buildSchemaSample(sheets) }] }),
+  });
+  const result = await res.json();
+  return extractJSONObject(result?.content?.[0]?.text || "");
+}
+function buildPositionsFromSchema(sheets, schema, fileName) {
+  if (!schema || !schema.columns) return null;
+  const sh = sheets[schema.sheetIndex] || sheets[0];
+  if (!sh) return null;
+  const c = schema.columns;
+  const header = Math.max(0, schema.headerRow || 0);
+  const get = (row, idx) => (idx == null || idx < 0) ? "" : (row[idx] == null ? "" : String(row[idx]).trim());
+  const items = [];
+  for (let r = header + 1; r < sh.rows.length; r++) {
+    const row = sh.rows[r];
+    if (!row || !row.length) continue;
+    const ticker = get(row, c.ticker), isin = get(row, c.isin);
+    const name = get(row, c.name) || ticker || isin;
+    if (!name) continue;
+    if (/^(total|összesen|sum|subtotal|grand total|cash|készpénz)\b/i.test(name)) continue;
+    let qty = parseLooseNum(get(row, c.quantity)); qty = isNaN(qty) ? 0 : qty;
+    let cost = parseLooseNum(get(row, c.costPrice)); cost = isNaN(cost) ? 0 : cost;
+    let price = parseLooseNum(get(row, c.currentPrice)); price = isNaN(price) ? 0 : price;
+    let mv = parseLooseNum(get(row, c.marketValue)); mv = isNaN(mv) ? 0 : mv;
+    if (!price && qty && mv) price = mv / qty;
+    if (!qty && price && mv) qty = mv / price;
+    if (!qty && mv && !price) { qty = 1; price = mv; }
+    if (!price) continue; // no usable value on this row
+    if (!cost) cost = price; // neutral P&L when no cost basis is given
+    items.push({
+      name, ticker, isin,
+      qty: +qty.toFixed(8), costBasis: +cost.toFixed(6), currentPrice: +price.toFixed(6),
+      currency: normCcy(get(row, c.currency), schema.globalCurrency), assetClass: get(row, c.assetClass) || "ETF",
+      region: "Global", notes: "Imported",
+    });
+  }
+  if (!items.length) return null;
+  const base = (fileName || "").replace(/\.[^.]+$/, "").slice(0, 40) || "Imported Portfolio";
+  return { type: "positions", portfolioName: base, broker: "", summary: `${items.length} holding${items.length === 1 ? "" : "s"} parsed from ${fileName || "file"}`, items };
 }
 
 // ─── Default Data ─────────────────────────────────────────────────────────────
@@ -2828,10 +2948,12 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
 
   // Apply live prices to every position with a ticker (skips Cash lines).
   async function refreshPrices(force = false) {
-    const tickers = data.portfolios.flatMap(p => p.positions).filter(pos => pos.assetClass !== "Cash").map(pos => pos.ticker).filter(Boolean);
-    if (!tickers.length) { setPriceStatus({ error: true, msg: "No tickers to price — add tickers to your positions first." }); return; }
+    const items = data.portfolios.flatMap(p => p.positions)
+      .filter(pos => pos.assetClass !== "Cash" && pos.ticker)
+      .map(pos => ({ ticker: pos.ticker, isin: pos.isin || "", currency: pos.currency || "" }));
+    if (!items.length) { setPriceStatus({ error: true, msg: "No tickers to price — add tickers to your positions first." }); return; }
     setPriceStatus({ loading: true, msg: "Fetching latest prices…" });
-    const r = await fetchLivePrices(tickers, { force });
+    const r = await fetchLivePrices(items, { force });
     if (!r || !r.fetched.length) { setPriceStatus({ error: true, msg: "Couldn't fetch prices — the price service may be unavailable or over its daily quota." }); return; }
     setData(d => ({
       ...d,
@@ -3111,7 +3233,7 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
         <Card style={{ padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div style={{ fontSize: 12, color: priceStatus?.error ? C.orange : C.muted }}>
             {priceStatus?.loading ? "⟳ " : "📈 "}
-            {priceStatus?.msg || "Track live market prices for your tickers. Prices are fetched in each instrument's listing currency, cached daily."}
+            {priceStatus?.msg || "Track live market prices. Holdings are auto-resolved by ISIN/ticker, converted to each holding's currency, and cached daily."}
           </div>
           {!readonly && (
             <button onClick={() => refreshPrices(true)} disabled={priceStatus?.loading}
@@ -4396,27 +4518,58 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
     setTimeout(() => fileInputRef.current?.click(), 80);
   }, [open, triggerFileOpen]);
 
+  // AI-assisted investment import: detect the column layout, then parse every row
+  // locally. Falls back to attaching the file for the assistant if mapping fails.
+  async function aiInvestmentImport(text, fileName) {
+    setMessages(m => [...m, { role: "user", content: `📎 ${fileName} [Investment export]` }]);
+    setMessages(m => [...m, { role: "assistant", content: "Reading the file and identifying the columns…" }]);
+    setLoading(true);
+    try {
+      const sheets = parseDelimitedToSheets(text);
+      const schema = await aiDetectInvestmentSchema(sheets);
+      const batch = schema ? buildPositionsFromSchema(sheets, schema, fileName) : null;
+      if (batch && batch.items.length) {
+        setMessages(m => [...m, { role: "assistant", content: `Mapped the columns and parsed ${batch.items.length} holding${batch.items.length === 1 ? "" : "s"}. Live prices will fill in current values where missing — review and confirm below.` }]);
+        setPendingBatch({ ...batch, duplicates: batch.items.map(() => false), checked: batch.items.map(() => true) });
+      } else {
+        setAttachedFile({ name: fileName, text });
+        setFileType("investment_export");
+        setMessages(m => [...m, { role: "assistant", content: "I couldn't confidently map the columns. I've attached the file — press send and I'll parse it directly." }]);
+      }
+    } catch (e) {
+      setAttachedFile({ name: fileName, text });
+      setFileType("investment_export");
+      setMessages(m => [...m, { role: "assistant", content: "Auto-mapping failed — I've attached the file, press send to parse it directly." }]);
+    }
+    setLoading(false);
+  }
+
   // When a file arrives from a tab upload card, pre-load it
   useEffect(() => {
     if (!pendingImport) return;
     const text = pendingImport.text || "";
     const learnedRules = buildLearnedRules(data.transactions || [], data.merchantRules || []);
-    // Try client-side parsers first so common formats skip the Claude round-trip.
+    // Try the deterministic Lightyear parser first; then route by file type.
     const lyBatch = tryParseLightyearCSV(text);
-    const revRows = lyBatch ? null : tryParseRevolutCSV(text, learnedRules);
     if (lyBatch) {
       setMessages(m => [...m, { role: "user", content: `📎 ${pendingImport.name} [Investment export]` }]);
       setMessages(m => [...m, { role: "assistant", content: `Detected a Lightyear statement — ${lyBatch.summary}. Live prices will fill in current values; review and confirm below.` }]);
       setPendingBatch({ ...lyBatch, duplicates: lyBatch.items.map(() => false), checked: lyBatch.items.map(() => true) });
-    } else if (revRows && revRows.length > 0) {
-      const dups = markDuplicates(revRows, data.transactions || []);
-      const dupCount = dups.filter(Boolean).length;
-      setMessages(m => [...m, { role: "user", content: `📎 ${pendingImport.name} [Bank statement]` }]);
-      setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${revRows.length} transactions.${dupCount ? ` ${dupCount} look like duplicates and were pre-unchecked.` : ""} Review and confirm below.` }]);
-      setPendingBatch({ type: "transactions", summary: `${revRows.length} transactions from ${pendingImport.name}`, items: revRows, duplicates: dups, checked: dups.map(d => !d) });
+    } else if (pendingImport.fileType === "investment_export") {
+      // Robust AI column-mapping path for any broker/bank holdings export.
+      aiInvestmentImport(text, pendingImport.name);
     } else {
-      setAttachedFile({ name: pendingImport.name, text: pendingImport.text });
-      setFileType(pendingImport.fileType);
+      const revRows = tryParseRevolutCSV(text, learnedRules);
+      if (revRows && revRows.length > 0) {
+        const dups = markDuplicates(revRows, data.transactions || []);
+        const dupCount = dups.filter(Boolean).length;
+        setMessages(m => [...m, { role: "user", content: `📎 ${pendingImport.name} [Bank statement]` }]);
+        setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${revRows.length} transactions.${dupCount ? ` ${dupCount} look like duplicates and were pre-unchecked.` : ""} Review and confirm below.` }]);
+        setPendingBatch({ type: "transactions", summary: `${revRows.length} transactions from ${pendingImport.name}`, items: revRows, duplicates: dups, checked: dups.map(d => !d) });
+      } else {
+        setAttachedFile({ name: pendingImport.name, text: pendingImport.text });
+        setFileType(pendingImport.fileType);
+      }
     }
     setMinimized(false);
     clearPendingImport?.();
@@ -4516,6 +4669,15 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   async function send() {
     if ((!input.trim() && !attachedFile) || loading) return;
     if (attachedFile && !fileType) return; // must select type before sending
+
+    // Investment exports go through the robust AI column-mapping pipeline instead
+    // of the generic one-shot extraction (handles large files / any layout).
+    if (attachedFile && fileType === "investment_export" && !readonly) {
+      const f = attachedFile;
+      setAttachedFile(null); setFileType(null); setInput("");
+      await aiInvestmentImport(f.text, f.name);
+      return;
+    }
 
     let displayContent = input.trim();
     if (attachedFile) displayContent = (displayContent ? displayContent + "\n" : "") + `📎 ${attachedFile.name} [${FILE_TYPE_LABELS[fileType]}]`;
