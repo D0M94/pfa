@@ -96,31 +96,25 @@ function addMonthsISO(iso, n) {
 // ─── Live asset prices (Twelve Data — free tier, CORS-friendly) ───────────────
 // Data-efficient: one batched request for all tickers, results cached for the day
 // in localStorage so re-opening the app or switching tabs costs no API calls.
-// Requires a free API key (twelvedata.com), stored device-locally. Without a key
-// the app keeps the manually entered prices.
-const PRICE_KEY_LS = "pfa_price_apikey";
-function getPriceApiKey() {
-  try { return localStorage.getItem(PRICE_KEY_LS) || (import.meta.env.VITE_TWELVEDATA_KEY || ""); } catch { return ""; }
-}
-async function fetchLivePrices(tickers, apiKey, { force = false } = {}) {
+// Prices come from YOUR backend proxy at /api/prices, which holds the Twelve Data
+// key server-side (see api/prices.js) so it is never exposed in the browser and a
+// shared server cache keeps quota use to ~1 upstream call per ticker per day.
+// If the endpoint is not deployed the app simply keeps manually entered prices.
+async function fetchLivePrices(tickers, { force = false } = {}) {
   const uniq = [...new Set((tickers || []).filter(Boolean))];
-  if (!uniq.length || !apiKey) return null;
+  if (!uniq.length) return null;
   const today = new Date().toISOString().slice(0, 10);
   let cache = {};
   try { const c = JSON.parse(localStorage.getItem("pfa_prices_v1") || "null"); if (c && c.date === today && !force) cache = c.prices || {}; } catch {}
   const need = uniq.filter(t => cache[t] == null);
   if (need.length) {
     try {
-      const url = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(need.join(","))}&apikey=${encodeURIComponent(apiKey)}`;
-      const res = await fetch(url);
+      const res = await fetch(`/api/prices?symbols=${encodeURIComponent(need.join(","))}${force ? "&force=1" : ""}`);
       const j = await res.json();
-      if (need.length === 1) {
-        if (j && j.price) cache[need[0]] = parseFloat(j.price);
-      } else {
-        for (const t of need) { const v = j?.[t]?.price; if (v) cache[t] = parseFloat(v); }
-      }
+      const got = (j && j.prices) || j || {};
+      for (const t of need) { const v = got[t]; if (v != null && !isNaN(parseFloat(v))) cache[t] = parseFloat(v); }
       try { localStorage.setItem("pfa_prices_v1", JSON.stringify({ date: today, prices: cache })); } catch {}
-    } catch { /* network/quota error — fall through with whatever is cached */ }
+    } catch { /* endpoint/network error — fall through with whatever is cached */ }
   }
   const prices = {}, missing = [];
   for (const t of uniq) { if (cache[t] != null && !isNaN(cache[t])) prices[t] = cache[t]; else missing.push(t); }
@@ -840,12 +834,6 @@ function AccountSettingsModal({ onClose, onExport, onDeleteRequest, userEmail, o
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleted, setDeleted] = useState(false);
-  const [apiKey, setApiKey] = useState(() => { try { return localStorage.getItem("pfa_price_apikey") || ""; } catch { return ""; } });
-  const [apiSaved, setApiSaved] = useState(false);
-  function saveApiKey() {
-    try { localStorage.setItem("pfa_price_apikey", apiKey.trim()); } catch {}
-    setApiSaved(true); setTimeout(() => setApiSaved(false), 2000);
-  }
 
   async function handleDelete() {
     setDeleting(true);
@@ -878,19 +866,6 @@ function AccountSettingsModal({ onClose, onExport, onDeleteRequest, userEmail, o
           <Btn variant="ghost" onClick={() => { onClose(); onShowPrivacy(); }} style={{ width: "100%", textAlign: "left", padding: "11px 16px" }}>
             🔒 View Privacy Policy
           </Btn>
-        </div>
-
-        {/* Live price API key (Twelve Data) — stored on this device only */}
-        <div style={{ marginBottom: 20, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
-          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>📈 Live price API key</div>
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
-            Optional. Paste a free key from <span style={{ color: C.textSoft }}>twelvedata.com</span> to enable live price tracking on the Wealth tab. Stored only on this device. FX rates work without a key.
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API key"
-              style={{ flex: 1, background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", color: C.text, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
-            <Btn onClick={saveApiKey} style={{ flexShrink: 0 }}>{apiSaved ? "✓ Saved" : "Save"}</Btn>
-          </div>
         </div>
 
         <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
@@ -2853,13 +2828,11 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
 
   // Apply live prices to every position with a ticker (skips Cash lines).
   async function refreshPrices(force = false) {
-    const apiKey = getPriceApiKey();
     const tickers = data.portfolios.flatMap(p => p.positions).filter(pos => pos.assetClass !== "Cash").map(pos => pos.ticker).filter(Boolean);
-    if (!apiKey) { setPriceStatus({ error: true, msg: "Add a free price API key in ⚙ Settings to enable live prices." }); return; }
     if (!tickers.length) { setPriceStatus({ error: true, msg: "No tickers to price — add tickers to your positions first." }); return; }
     setPriceStatus({ loading: true, msg: "Fetching latest prices…" });
-    const r = await fetchLivePrices(tickers, apiKey, { force });
-    if (!r || !r.fetched.length) { setPriceStatus({ error: true, msg: "Couldn't fetch prices — check your API key or daily quota." }); return; }
+    const r = await fetchLivePrices(tickers, { force });
+    if (!r || !r.fetched.length) { setPriceStatus({ error: true, msg: "Couldn't fetch prices — the price service may be unavailable or over its daily quota." }); return; }
     setData(d => ({
       ...d,
       portfolios: d.portfolios.map(p => ({
@@ -2871,11 +2844,9 @@ function Wealth({ data, setData, readonly, onImport, onOpenChat, onOpenUpload })
     setPriceStatus({ msg: `Updated ${r.fetched.length} price${r.fetched.length === 1 ? "" : "s"} · ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}${miss}` });
   }
 
-  // Auto-refresh once per day if a key is set and the cache is stale.
+  // Auto-refresh once per day if the cache is stale (server holds the key).
   useEffect(() => {
     if (readonly) return;
-    const apiKey = getPriceApiKey();
-    if (!apiKey) return;
     let stale = true;
     try { const c = JSON.parse(localStorage.getItem("pfa_prices_v1") || "null"); stale = !c || c.date !== todayStr(); } catch {}
     if (stale) refreshPrices(false);
@@ -4944,9 +4915,12 @@ function Dashboard({ data, setTab, viewMonth, onOpenChat }) {
   const dayOfMonth = now.getDate();
   const monthFraction = viewMonth === thisMonth ? dayOfMonth / daysInMonth : 1;
 
+  // Exclude "Transfer" (money moving between the owner's own accounts) so the
+  // dashboard totals match the Cash flow tab and reflect real money in/out.
+  const isFlow = t => t.category !== "Transfer";
   const monthTxns = (data.transactions || []).filter(t => t.date?.startsWith(viewMonth));
-  const income = monthTxns.filter(t => t.type === "income").reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
-  const expenses = monthTxns.filter(t => t.type === "expense").reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
+  const income = monthTxns.filter(t => t.type === "income" && isFlow(t)).reduce((s, t) => s + toHUF(t.amount, t.currency), 0);
+  const expenses = monthTxns.filter(t => t.type === "expense" && isFlow(t)).reduce((s, t) => s + Math.abs(toHUF(t.amount, t.currency)), 0);
   const net = income - expenses;
   const savingsRate = income > 0 ? Math.round((net / income) * 100) : null;
 
