@@ -164,6 +164,28 @@ function inferCategory(desc, learnedRules) {
   return null;
 }
 
+// ─── Shared hardcoded keyword→category fallback (Hungarian + English) ────────
+// Used by every deterministic transaction/cost parser (Revolut, Erste, the
+// generic heuristic path, and cost-list imports) as the last guess before
+// something lands in "Uncategorized". Kept as ASCII-friendly patterns since
+// encoding corruption tends to preserve plain ASCII merchant names. Returns a
+// category string, or null if nothing matched (caller decides the final
+// fallback — usually "Income"/"Transfer" by sign/context, else "Uncategorized").
+function guessCategoryByKeyword(desc) {
+  const d = String(desc || "").toLowerCase();
+  if (!d) return null;
+  if (/lidl|spar|aldi|tesco|penny|cba|\bdm\b|yolo food|cityfood|vegafutar|obstermann|flekken|kebab|bisztro|pizza|kurtoskalacs|cukraszda|bundiner|kifli|balena|ichigo|burger|restau|wolt|foodora|mcdonald|kfc|subway|auchan|interspar|chio|gyros|shawarma|sushi|market|grocery|supermar|etel|elelmis|hentesbolt|pekseg|bakery|food|lunch|dinner/i.test(d)) return "Food";
+  if (/patika|pharmy|pharmacy|pingvin|gyogyszer|benu|fogaszat|fogorvos|optika|szemeszet|rendelo|korhaz|orvos|doktor|klinika|laborat|rhone|gyogyito|vitamin|docler|semmelweis/i.test(d)) return "Health";
+  if (/mvm|dijnet|e\.on|nmhh|telenor|yettel|vodafone|\bupc\b|digi|telekom|telekomfelt|biztosit|allianz|generali|aegon|\bnn\b|union bizt|aon|internet|mobilnet|foldgaz|gazszolg|arviz|vizmuvek|szemet|kukasszolg/i.test(d)) return "Utilities";
+  if (/omv|\bmol\b|shell|bkk|vonat|mav|parking|bolt taxi|uber|e-matrica|autopalya|wizzair|ryanair|flixbus|buszjegy|taxi|interrail|airport|repter|repjegy|benzin|diesel|car wash/i.test(d)) return "Transport";
+  if (/netflix|spotify|tv2|arena|steam|mozi|cinema|simplep\*kaki|hbo|disney|apple\.com|youtube|prime video|twitch|jegy|billett|koncert|theater|szinhaz|museum|muzeum|kindle|audible/i.test(d)) return "Entertainment";
+  if (/zara|h&m|sinsay|pepco|reserved|vinted|deichmann|tshirt|nike|adidas|decathlon|\bc&a\b|pull.bear|mango|uniqlo|\bkik\b|primark|about you|answear|sportisimo|hervis/i.test(d)) return "Clothing";
+  if (/hornbach|obi|bauhaus|leroy|kerteszet|garden|ikea|kika|jysk|depot|mr bricolage|praktiker|lezser|furdo|homedepo/i.test(d)) return "Garden";
+  if (/temu|emag|alza|zooplus|tchibo|aliexpress|amazon|ebay/i.test(d)) return "Other";
+  if (/revolut|atm|kesz|cash kivét|bankkiol/i.test(d)) return "Transfer";
+  return null;
+}
+
 // ─── Revolut CSV parser (client-side, no token limits) ────────────────────────
 function tryParseRevolutCSV(text, learnedRules = {}) {
   const lines = text.trim().split(/\r?\n/);
@@ -207,20 +229,12 @@ function tryParseRevolutCSV(text, learnedRules = {}) {
 
     // 1. Learned rules first
     let category = inferCategory(desc, learnedRules);
-
-    // 2. Hard-coded fallbacks (ASCII merchant names survive encoding)
+    // 2. Hard-coded keyword fallback (shared across all parsers)
+    if (!category) category = guessCategoryByKeyword(d);
+    // 3. Type-column / income-sign fallback
     if (!category) {
-      if (/lidl|spar|aldi|tesco|penny|cba|yolo food|cityfood|vegafutar|obstermann|flekken|kebab|bisztro|pizza|kurtoskalacs|cukraszda|bundiner|kifli|balena|ichigo|burger|restau|wolt|foodora|mcdonald|kfc|subway|auchan|interspar|chio|gyros|shawarma|sushi|market|grocery|supermar|etel|elelmis|hentesbolt|pekseg|bakery|food|lunch|dinner/i.test(d)) category = 'Food';
-      else if (/patika|pharmy|pharmacy|pingvin|gyogyszer|benu|fogaszat|fogorvos|optika|szemeszet|rendelo|korhaz|orvos|doktor|klinika|laborat|rhone|gyogyito|vitamin|docler|semmelweis/i.test(d)) category = 'Health';
-      else if (/mvm|dijnet|e\.on|nmhh|telenor|yettel|vodafone|\bupc\b|digi|telekom|biztosit|allianz|generali|aegon|\bnn\b|union bizt|aon|internet|mobilnet|foldgaz|gazszolg|arviz|vizmuvek|szemet|kukasszolg/i.test(d)) category = 'Utilities';
-      else if (/omv|mol |shell|bkk|vonat|mav|parking|bolt taxi|uber|e-matrica|autopalya|wizzair|ryanair|flixbus|buszjegy|taxi|autopalya|interrail|airport|repter|repjegy|benzin|diesel|car wash/i.test(d)) category = 'Transport';
-      else if (/netflix|spotify|tv2|arena|steam|mozi|cinema|hbo|disney|apple\.com|youtube|prime video|twitch|jegy|billett|koncert|theater|szinhaz|museum|muzeum|kindle|audible/i.test(d)) category = 'Entertainment';
-      else if (/zara|h&m|sinsay|pepco|reserved|vinted|deichmann|tshirt|nike|adidas|decathlon|\bc&a\b|pull.bear|mango|uniqlo|\bkik\b|primark|about you|answear|sportisimo|hervis/i.test(d)) category = 'Clothing';
-      else if (/hornbach|obi|bauhaus|leroy|kerteszet|garden|ikea|kika|jysk|depot|mr bricolage|praktiker|lezser|furdo|homedepo/i.test(d)) category = 'Garden';
-      else if (/temu|emag|alza|zooplus|tchibo|aliexpress|amazon|ebay/i.test(d)) category = 'Other';
       // Transfer detection via type column ('tual' survives from 'átutalás')
-      else if (/tual|transfer/i.test(txType)) category = isIncome ? 'Income' : 'Transfer';
-      else if (/atm|kesz|cash kivét|bankkiol/i.test(d)) category = 'Transfer';
+      if (/tual|transfer/i.test(txType)) category = isIncome ? 'Income' : 'Transfer';
       else if (isIncome) category = 'Income';
       else category = 'Uncategorized';
     }
@@ -343,6 +357,25 @@ function tryParseErsteXLSX(wb, learnedRules = {}) {
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) return null;
   const rows = window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  return tryParseErsteFromRows(rows, learnedRules);
+}
+// Text-based counterpart: used by the tab-upload path, which only has the
+// converted text (see fileToText), not the original SheetJS workbook. Tries
+// every parsed sheet and returns the first match, or null.
+function tryParseErsteFromText(text, learnedRules = {}) {
+  const sheets = parseDelimitedToSheets(text);
+  for (const sh of sheets) {
+    const out = tryParseErsteFromRows(sh.rows, learnedRules);
+    if (out) return out;
+  }
+  return null;
+}
+// Shared row-parsing logic for the Erste bank-statement export (not the
+// "Instrumentum bekerülés" holdings report — see tryParseErsteHoldingsXLS).
+// `rows` is a 2D array: either from SheetJS sheet_to_json (raw cell types) or
+// from parseDelimitedToSheets (all strings, dates already ISO-normalized by
+// fileToText). Both shapes are handled by the code below.
+function tryParseErsteFromRows(rows, learnedRules = {}) {
   // Detection: cell A1 contains a string starting with "Erste"
   if (!rows[0] || typeof rows[0][0] !== "string" || !rows[0][0].startsWith("Erste")) return null;
   // Row index 3 (4th row) holds the Hungarian column headers
@@ -404,19 +437,8 @@ function tryParseErsteXLSX(wb, learnedRules = {}) {
     const type = amount < 0 ? "expense" : "income";
     const absAmt = Math.abs(amount);
     let category = inferCategory(desc, learnedRules);
-    if (!category) {
-      const d = desc.toLowerCase();
-      if (/lidl|spar|aldi|tesco|penny|cba|\bdm\b|yolo food|vegafutar|kifli|balena|ichigo|burger|bisztro|pizza|kebab|restau|cukraszda|wolt|foodora|mcdonald|kfc|subway|auchan|interspar|chio|gyros|shawarma|sushi|market|grocery|supermar|etel|elelmis|hentesbolt|pekseg|bakery|food|lunch|dinner/i.test(d)) category = "Food";
-      else if (/patika|pharmy|pingvin|gyogyszer|benu|fogaszat|fogorvos|optika|szemeszet|rendelo|korhaz|orvos|doktor|klinika|laborat|rhone|gyogyito|vitamin|docler|semmelweis/i.test(d)) category = "Health";
-      else if (/mvm|dijnet|e\.on|nmhh|telekomfelt|telekom|telenor|yettel|vodafone|\bupc\b|digi|biztosit|allianz|generali|aegon|\bnn\b|union bizt|aon|internet|mobilnet|foldgaz|gazszolg|arviz|vizmuvek|szemet|kukasszolg/i.test(d)) category = "Utilities";
-      else if (/omv|\bmol\b|shell|bkk|vonat|mav|parking|uber|e-matrica|autopalya|wizzair|ryanair|flixbus|buszjegy|taxi|interrail|airport|repter|repjegy|benzin|diesel|car wash/i.test(d)) category = "Transport";
-      else if (/netflix|spotify|steam|mozi|cinema|simplep\*kaki|arena|hbo|disney|apple\.com|youtube|prime video|twitch|jegy|billett|koncert|theater|szinhaz|museum|muzeum|kindle|audible/i.test(d)) category = "Entertainment";
-      else if (/zara|h&m|sinsay|pepco|reserved|vinted|deichmann|nike|adidas|decathlon|\bc&a\b|pull.bear|mango|uniqlo|\bkik\b|primark|about you|answear|sportisimo|hervis/i.test(d)) category = "Clothing";
-      else if (/hornbach|obi|bauhaus|leroy|kerteszet|ikea|kika|jysk|depot|mr bricolage|praktiker|furdo|homedepo/i.test(d)) category = "Garden";
-      else if (/revolut|atm|kesz|cash kivét|bankkiol/i.test(d)) category = "Transfer";
-      else if (type === "income") category = "Income";
-      else category = "Uncategorized";
-    }
+    if (!category) category = guessCategoryByKeyword(desc);
+    if (!category) category = type === "income" ? "Income" : "Uncategorized";
     transactions.push({ date: dateStr, desc, amount: absAmt, currency, category, type, account: "Erste" });
   }
   return transactions.length > 0 ? transactions : null;
@@ -554,16 +576,21 @@ const HEADER_PATTERNS = [
 // Return the most SPECIFIC role for a header — the role whose matched keyword is
 // longest. This stops "értékpapír" (security/name) being grabbed by "érték" (value),
 // or "eszközosztály" (asset class) by "eszköz" (asset/name).
-function _bestRoleForHeader(h) {
+function _bestRoleFor(h, patterns) {
   const n = _norm(h);
   if (!n) return null;
   let bestRole = null, bestLen = 0;
-  for (const [role, pats] of HEADER_PATTERNS) {
+  for (const [role, pats] of patterns) {
     for (const p of pats) { if (n.includes(p) && p.length > bestLen) { bestLen = p.length; bestRole = role; } }
   }
   return bestRole ? { role: bestRole, len: bestLen } : null;
 }
-function heuristicSchema(sheets) {
+function _bestRoleForHeader(h) { return _bestRoleFor(h, HEADER_PATTERNS); }
+// Generic keyword-based column detector. `patterns` is a HEADER_PATTERNS-shaped
+// table; `valueRoles`/`nameRoles` are the roles whose presence together boosts
+// confidence that a row is really the header row (e.g. for positions: a price
+// role + a name role; for transactions: an amount + a date/description).
+function heuristicSchemaFor(sheets, patterns, valueRoles, nameRoles) {
   let best = null;
   sheets.forEach((sh, si) => {
     const scan = Math.min(sh.rows.length, 25);
@@ -571,17 +598,67 @@ function heuristicSchema(sheets) {
       const row = sh.rows[r] || [];
       const cols = {}, roleLen = {};
       row.forEach((cell, ci) => {
-        const b = _bestRoleForHeader(cell);
+        const b = _bestRoleFor(cell, patterns);
         if (b && (cols[b.role] == null || b.len > roleLen[b.role])) { cols[b.role] = ci; roleLen[b.role] = b.len; }
       });
       const matches = Object.keys(cols).length;
-      const hasVal = cols.currentPrice != null || cols.marketValue != null;
-      const hasName = cols.name != null || cols.ticker != null || cols.isin != null;
+      const hasVal = valueRoles.some(vr => cols[vr] != null);
+      const hasName = nameRoles.some(nr => cols[nr] != null);
       const score = matches + (hasName && hasVal ? 2 : 0);
       if (matches >= 2 && (!best || score > best.score)) best = { sheetIndex: si, headerRow: r, columns: cols, globalCurrency: null, score };
     }
   });
   return best;
+}
+function heuristicSchema(sheets) {
+  return heuristicSchemaFor(sheets, HEADER_PATTERNS, ["currentPrice", "marketValue"], ["name", "ticker", "isin"]);
+}
+// Keyword-based column detection for bank statements / transaction logs
+// (Hungarian + English headers), analogous to HEADER_PATTERNS above.
+const TXN_HEADER_PATTERNS = [
+  ["date", ["tranzakciodatumaesideje", "konyveletsdatuma", "konyvelesdatuma", "ertéknap", "erteknap", "tranzakciodatum", "transactiondate", "bookingdate", "postingdate", "valuedate", "datum", "date", "kelt"]],
+  ["currency", ["devizanem", "penznem", "deviza", "currency", "ccy", "curr", "valuta"]],
+  ["amount", ["osszeg", "amount", "terheles", "jovairas", "ertek", "value"]],
+  ["type", ["tranzakciotipus", "iranyd", "direction", "txtype", "tipus", "type"]],
+  ["desc", ["kozlemenyekmegjegyzesek", "partnernev", "megnevezes", "kozlemeny", "leiras", "narrative", "reference", "merchant", "partner", "details", "description", "memo", "desc"]],
+  ["category", ["kategoria", "category", "cimke", "tag"]],
+  ["account", ["kartyaszam", "szamlaszam", "szamla", "account", "card", "bank"]],
+];
+function heuristicTxnSchema(sheets) {
+  return heuristicSchemaFor(sheets, TXN_HEADER_PATTERNS, ["amount"], ["desc", "date"]);
+}
+// Keyword-based column detection for a cost / recurring-bill list.
+const COST_HEADER_PATTERNS = [
+  ["frequency", ["gyakorisag", "frequency", "periodicity", "interval"]],
+  ["nextDue", ["kovetkezoesedekesseg", "esedekesseg", "nextdue", "duedate", "esedekes"]],
+  ["currency", ["devizanem", "penznem", "deviza", "currency", "ccy", "curr", "valuta"]],
+  ["category", ["kategoria", "category", "cimke", "tag"]],
+  ["owner", ["tulajdonos", "felelos", "paidby", "owner"]],
+  ["notes", ["megjegyzes", "comment", "notes", "note"]],
+  ["amount", ["havidij", "osszeg", "amount", "koltseg", "ertek", "value", "ar", "price"]],
+  ["type", ["ismetlodo", "recurring", "onetime", "tipus", "type"]],
+  ["name", ["megnevezes", "kolcseg", "nev", "name", "item", "bill", "cost", "desc", "description"]],
+];
+function heuristicCostSchema(sheets) {
+  return heuristicSchemaFor(sheets, COST_HEADER_PATTERNS, ["amount"], ["name"]);
+}
+// Locale-tolerant date parser: handles ISO strings (incl. those normalised by
+// fileToText from Excel Date cells), "DD.MM.YYYY"/"DD/MM/YYYY" (day-first, as
+// used throughout the rest of this file), "YYYY.MM.DD", and raw Excel serials.
+function parseLooseDate(v) {
+  if (v == null) return "";
+  if (v instanceof Date) return isNaN(v) ? "" : v.toISOString().slice(0, 10);
+  const s = String(v).trim();
+  if (!s) return "";
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  if (/^\d{4,6}(\.\d+)?$/.test(s)) { // bare Excel serial that survived text conversion
+    const n = Number(s);
+    if (n > 20000 && n < 80000) return new Date((n - 25569) * 86400000).toISOString().slice(0, 10);
+  }
+  return "";
 }
 // Locale-tolerant number parser: handles "1.234,56", "1,234.56", "1 234,5", "(123)".
 function parseLooseNum(v) {
@@ -669,6 +746,84 @@ function buildPositionsFromSchema(sheets, schema, fileName) {
   if (!items.length) return null;
   const base = (fileName || "").replace(/\.[^.]+$/, "").slice(0, 40) || "Imported Portfolio";
   return { type: "positions", portfolioName: base, broker: "", summary: `${items.length} holding${items.length === 1 ? "" : "s"} parsed from ${fileName || "file"}`, items };
+}
+
+// Deterministic transaction-row builder used once heuristicTxnSchema (or the
+// manual ColumnMapper) has identified which column holds each field. Mirrors
+// buildPositionsFromSchema's contract: never throws, returns null if nothing
+// usable was found so the caller can fall back further.
+function buildTransactionsFromSchema(sheets, schema, fileName, learnedRules) {
+  if (!schema || !schema.columns) return null;
+  const sh = sheets[schema.sheetIndex] || sheets[0];
+  if (!sh) return null;
+  const c = schema.columns;
+  const header = Math.max(0, schema.headerRow || 0);
+  const get = (row, idx) => (idx == null || idx < 0) ? "" : (row[idx] == null ? "" : String(row[idx]).trim());
+  const items = [];
+  for (let r = header + 1; r < sh.rows.length; r++) {
+    const row = sh.rows[r];
+    if (!row || !row.length) continue;
+    const date = parseLooseDate(get(row, c.date));
+    const amount = parseLooseNum(get(row, c.amount));
+    const desc = get(row, c.desc) || get(row, c.account) || "";
+    if (!date || isNaN(amount) || amount === 0 || !desc) continue;
+    const rawType = get(row, c.type).toLowerCase();
+    const type = /jov|bevetel|income|credit|^\+/.test(rawType) ? "income"
+      : /kiad|terheles|expense|debit|^-/.test(rawType) ? "expense"
+      : (amount >= 0 ? "income" : "expense");
+    const category = get(row, c.category) || inferCategory(desc, learnedRules || {}) || guessCategoryByKeyword(desc) || (type === "income" ? "Income" : "Uncategorized");
+    items.push({
+      date, desc,
+      amount: +Math.abs(amount).toFixed(2),
+      currency: normCcy(get(row, c.currency), schema.globalCurrency),
+      category, type,
+      account: get(row, c.account) || "Imported",
+    });
+  }
+  if (!items.length) return null;
+  return { type: "transactions", summary: `${items.length} transaction${items.length === 1 ? "" : "s"} parsed from ${fileName || "file"}`, items };
+}
+
+// Deterministic cost/bill-row builder — same contract as the above, for the
+// "cost_list" import type (recurring bills, subscriptions, one-off costs).
+function buildCostsFromSchema(sheets, schema, fileName, learnedRules) {
+  if (!schema || !schema.columns) return null;
+  const sh = sheets[schema.sheetIndex] || sheets[0];
+  if (!sh) return null;
+  const c = schema.columns;
+  const header = Math.max(0, schema.headerRow || 0);
+  const get = (row, idx) => (idx == null || idx < 0) ? "" : (row[idx] == null ? "" : String(row[idx]).trim());
+  const items = [];
+  for (let r = header + 1; r < sh.rows.length; r++) {
+    const row = sh.rows[r];
+    if (!row || !row.length) continue;
+    const name = get(row, c.name);
+    if (!name) continue;
+    if (/^(total|összesen|osszesen|sum|subtotal|grand total)\b/i.test(name)) continue;
+    const amount = parseLooseNum(get(row, c.amount));
+    if (isNaN(amount) || !amount) continue;
+    const freqRaw = get(row, c.frequency).toLowerCase();
+    const frequency = /negyed|quarter/.test(freqRaw) ? "quarterly" : /ev|year|annual/.test(freqRaw) ? "annual" : "monthly";
+    const typeRaw = get(row, c.type).toLowerCase();
+    const type = /egyszeri|one[- ]?time|onetime/.test(typeRaw) ? "onetime" : "recurring";
+    // Same guessing chain as transactions: explicit column → learned merchant
+    // rules (keyed the same way, since bill names are just short descriptions)
+    // → hardcoded keywords → "Uncategorized" (NOT "Other" — that's reserved
+    // for confirmed-miscellaneous, same convention as transactions).
+    const category = get(row, c.category) || inferCategory(name, learnedRules || {}) || guessCategoryByKeyword(name) || "Uncategorized";
+    items.push({
+      name,
+      amount: +Math.abs(amount).toFixed(2),
+      currency: normCcy(get(row, c.currency), schema.globalCurrency),
+      category,
+      type, frequency,
+      owner: get(row, c.owner) || "Joint",
+      nextDue: parseLooseDate(get(row, c.nextDue)) || "",
+      notes: get(row, c.notes) || "Imported",
+    });
+  }
+  if (!items.length) return null;
+  return { type: "costs", summary: `${items.length} cost${items.length === 1 ? "" : "s"} parsed from ${fileName || "file"}`, items };
 }
 
 // ─── Erste "Instrumentum bekerülés" holdings report (Crystal Reports .xls) ─────
@@ -4610,12 +4765,47 @@ function QuickAdd({ setData, onClose, isMobile }) {
 // ─── Manual column mapper (guaranteed-to-work import fallback) ─────────────────
 // Shows the uploaded file as a preview and lets the user pick which column holds
 // each field. Pre-filled from auto-detection; the preview updates live.
-function ColumnMapper({ sheets, fileName, guess, onCancel, onConfirm }) {
-  const ROLES = [
-    ["name", "Name / Instrument"], ["ticker", "Ticker / Symbol"], ["isin", "ISIN"],
-    ["quantity", "Quantity / Units"], ["costPrice", "Cost / Avg price"], ["currentPrice", "Current price"],
-    ["marketValue", "Market value"], ["currency", "Currency"], ["assetClass", "Asset class"],
-  ];
+// Per-import-type configuration for the manual column mapper: which roles are
+// offered, how to build a preview batch from a chosen mapping, and how each
+// row previews in the confirmation list. Adding a new import type only means
+// adding an entry here — the mapper UI itself stays generic.
+const MAPPER_CONFIG = {
+  positions: {
+    label: "holding",
+    roles: [
+      ["name", "Name / Instrument"], ["ticker", "Ticker / Symbol"], ["isin", "ISIN"],
+      ["quantity", "Quantity / Units"], ["costPrice", "Cost / Avg price"], ["currentPrice", "Current price"],
+      ["marketValue", "Market value"], ["currency", "Currency"], ["assetClass", "Asset class"],
+    ],
+    build: buildPositionsFromSchema,
+    left: it => `${it.ticker ? it.ticker + " · " : ""}${it.name}`,
+    right: it => `${it.qty} × ${it.currentPrice} ${it.currency}`,
+  },
+  transactions: {
+    label: "transaction",
+    roles: [
+      ["date", "Date"], ["desc", "Description"], ["amount", "Amount"], ["currency", "Currency"],
+      ["category", "Category"], ["type", "Type (income/expense)"], ["account", "Account"],
+    ],
+    build: (sheets, schema, fileName) => buildTransactionsFromSchema(sheets, schema, fileName, {}),
+    left: it => `${it.date} · ${it.desc}`,
+    right: it => `${it.type === "income" ? "+" : "−"}${it.amount} ${it.currency}`,
+  },
+  costs: {
+    label: "cost",
+    roles: [
+      ["name", "Name"], ["amount", "Amount"], ["currency", "Currency"], ["frequency", "Frequency"],
+      ["category", "Category"], ["type", "Type (recurring/onetime)"], ["owner", "Owner"],
+      ["nextDue", "Next due date"], ["notes", "Notes"],
+    ],
+    build: buildCostsFromSchema,
+    left: it => it.name,
+    right: it => `${it.amount} ${it.currency} · ${it.frequency}`,
+  },
+};
+function ColumnMapper({ sheets, fileName, guess, kind = "positions", onCancel, onConfirm }) {
+  const cfg = MAPPER_CONFIG[kind] || MAPPER_CONFIG.positions;
+  const ROLES = cfg.roles;
   const [sheetIndex, setSheetIndex] = useState(guess?.sheetIndex || 0);
   const [headerRow, setHeaderRow] = useState(guess?.headerRow || 0);
   const [cols, setCols] = useState(() => ({ ...(guess?.columns || {}) }));
@@ -4625,7 +4815,7 @@ function ColumnMapper({ sheets, fileName, guess, onCancel, onConfirm }) {
   const maxCols = Math.max(0, ...sh.rows.slice(0, 30).map(r => r.length));
   const colOpts = Array.from({ length: maxCols }, (_, i) => ({ i, label: `Col ${i}${headerCells[i] ? " · " + String(headerCells[i]).slice(0, 20) : ""}` }));
   const schema = { sheetIndex, headerRow, columns: cols, globalCurrency: globalCur || null };
-  const preview = buildPositionsFromSchema(sheets, schema, fileName);
+  const preview = cfg.build(sheets, schema, fileName);
   const items = preview ? preview.items : [];
   const setRole = (role, v) => setCols(c => ({ ...c, [role]: v === "" ? null : Number(v) }));
   const selStyle = { background: C.surfaceHigh, border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 8px", color: C.text, fontSize: 12, outline: "none", width: "100%" };
@@ -4672,15 +4862,15 @@ function ColumnMapper({ sheets, fileName, guess, onCancel, onConfirm }) {
           </div>
           {items.slice(0, 4).map((it, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.textSoft, padding: "3px 0" }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{it.ticker ? it.ticker + " · " : ""}{it.name}</span>
-              <span style={{ color: C.muted }}>{it.qty} × {it.currentPrice} {it.currency}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{cfg.left(it)}</span>
+              <span style={{ color: C.muted }}>{cfg.right(it)}</span>
             </div>
           ))}
           {items.length > 4 && <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>+ {items.length - 4} more</div>}
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn onClick={() => onConfirm(schema)} disabled={!items.length} style={{ flex: 1 }}>Import {items.length || ""} holdings</Btn>
+          <Btn onClick={() => onConfirm(schema)} disabled={!items.length} style={{ flex: 1 }}>Import {items.length || ""} {cfg.label}{items.length === 1 ? "" : "s"}</Btn>
           <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
         </div>
       </div>
@@ -4698,7 +4888,7 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
   const [attachedFile, setAttachedFile] = useState(null);
   const [fileType, setFileType] = useState(null);
   const [pendingBatch, setPendingBatch] = useState(null);
-  const [pendingMapping, setPendingMapping] = useState(null); // { sheets, fileName, guess } — manual column mapper
+  const [pendingMapping, setPendingMapping] = useState(null); // { kind, sheets, fileName, guess } — manual column mapper
   const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
 
@@ -4758,18 +4948,68 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
       } else {
         // 3) Guaranteed fallback: let the user map the columns by hand.
         setMessages(m => [...m, { role: "assistant", content: "I couldn't auto-detect the columns — please map them below. The preview updates as you choose." }]);
-        setPendingMapping({ sheets, fileName, guess: schema || { sheetIndex: 0, headerRow: 0, columns: {}, globalCurrency: null } });
+        setPendingMapping({ kind: "positions", sheets, fileName, guess: schema || { sheetIndex: 0, headerRow: 0, columns: {}, globalCurrency: null } });
       }
     } catch (e) {
       if (sheets && sheets.length) {
         setMessages(m => [...m, { role: "assistant", content: "I couldn't auto-detect the columns — please map them below." }]);
-        setPendingMapping({ sheets, fileName, guess: { sheetIndex: 0, headerRow: 0, columns: {}, globalCurrency: null } });
+        setPendingMapping({ kind: "positions", sheets, fileName, guess: { sheetIndex: 0, headerRow: 0, columns: {}, globalCurrency: null } });
       } else {
         setAttachedFile({ name: fileName, text }); setFileType("investment_export");
         setMessages(m => [...m, { role: "assistant", content: "Couldn't read the file — press send and I'll try to parse it directly." }]);
       }
     }
     setLoading(false);
+  }
+
+  function showTxnBatch(items, fileName, label) {
+    const dups = markDuplicates(items, data.transactions || []);
+    const dupCount = dups.filter(Boolean).length;
+    setMessages(m => [...m, { role: "user", content: `📎 ${fileName} [Bank statement]` }]);
+    setMessages(m => [...m, { role: "assistant", content: `Detected ${label} — parsed ${items.length} transaction${items.length === 1 ? "" : "s"}.${dupCount ? ` ${dupCount} look like duplicates and were pre-unchecked.` : ""} Review and confirm below.` }]);
+    setPendingBatch({
+      type: "transactions",
+      summary: `${items.length} transactions from ${fileName}${dupCount ? ` · ${dupCount} possible duplicate${dupCount === 1 ? "" : "s"}` : ""}`,
+      items, duplicates: dups, checked: dups.map(d => !d),
+    });
+  }
+
+  // Deterministic-first bank-statement pipeline, same shape as aiInvestmentImport:
+  // dedicated bank parsers → generic keyword-based column detection → guaranteed
+  // manual mapper. No network call is required to reach a working result.
+  function routeBankImport(text, fileName, learnedRules) {
+    const ersteRows = tryParseErsteFromText(text, learnedRules);
+    if (ersteRows && ersteRows.length) { showTxnBatch(ersteRows, fileName, "Erste bank statement"); return; }
+    const revRows = tryParseRevolutCSV(text, learnedRules);
+    if (revRows && revRows.length) { showTxnBatch(revRows, fileName, "Revolut statement"); return; }
+    const sheets = parseDelimitedToSheets(text);
+    const schema = heuristicTxnSchema(sheets);
+    const batch = schema ? buildTransactionsFromSchema(sheets, schema, fileName, learnedRules) : null;
+    if (batch && batch.items.length) {
+      showTxnBatch(batch.items, fileName, "the statement");
+      return;
+    }
+    setMessages(m => [...m, { role: "user", content: `📎 ${fileName} [Bank statement]` }]);
+    setMessages(m => [...m, { role: "assistant", content: "I couldn't auto-detect the columns — please map them below. The preview updates as you choose." }]);
+    setPendingMapping({ kind: "transactions", sheets, fileName, guess: schema || { sheetIndex: 0, headerRow: 0, columns: {}, globalCurrency: null } });
+  }
+
+  // Same deterministic-first shape for cost/bill lists — there is no dedicated
+  // per-provider parser here (cost lists aren't bank-format-specific), so it's
+  // heuristic detection → guaranteed manual mapper.
+  function routeCostImport(text, fileName, learnedRules) {
+    const sheets = parseDelimitedToSheets(text);
+    const schema = heuristicCostSchema(sheets);
+    const batch = schema ? buildCostsFromSchema(sheets, schema, fileName, learnedRules) : null;
+    if (batch && batch.items.length) {
+      setMessages(m => [...m, { role: "user", content: `📎 ${fileName} [Cost / bill list]` }]);
+      setMessages(m => [...m, { role: "assistant", content: `Mapped the columns and parsed ${batch.items.length} cost${batch.items.length === 1 ? "" : "s"}. Review and confirm below.` }]);
+      setPendingBatch({ ...batch, duplicates: batch.items.map(() => false), checked: batch.items.map(() => true) });
+      return;
+    }
+    setMessages(m => [...m, { role: "user", content: `📎 ${fileName} [Cost / bill list]` }]);
+    setMessages(m => [...m, { role: "assistant", content: "I couldn't auto-detect the columns — please map them below. The preview updates as you choose." }]);
+    setPendingMapping({ kind: "costs", sheets, fileName, guess: schema || { sheetIndex: 0, headerRow: 0, columns: {}, globalCurrency: null } });
   }
 
   // When a file arrives from a tab upload card, pre-load it
@@ -4784,20 +5024,13 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
       setMessages(m => [...m, { role: "assistant", content: `Detected a Lightyear statement — ${lyBatch.summary}. Live prices will fill in current values; review and confirm below.` }]);
       setPendingBatch({ ...lyBatch, duplicates: lyBatch.items.map(() => false), checked: lyBatch.items.map(() => true) });
     } else if (pendingImport.fileType === "investment_export") {
-      // Robust AI column-mapping path for any broker/bank holdings export.
+      // Robust AI-assisted column-mapping path for any broker/bank holdings export.
       aiInvestmentImport(text, pendingImport.name);
+    } else if (pendingImport.fileType === "cost_list") {
+      routeCostImport(text, pendingImport.name, learnedRules);
     } else {
-      const revRows = tryParseRevolutCSV(text, learnedRules);
-      if (revRows && revRows.length > 0) {
-        const dups = markDuplicates(revRows, data.transactions || []);
-        const dupCount = dups.filter(Boolean).length;
-        setMessages(m => [...m, { role: "user", content: `📎 ${pendingImport.name} [Bank statement]` }]);
-        setMessages(m => [...m, { role: "assistant", content: `Detected Revolut statement — parsed ${revRows.length} transactions.${dupCount ? ` ${dupCount} look like duplicates and were pre-unchecked.` : ""} Review and confirm below.` }]);
-        setPendingBatch({ type: "transactions", summary: `${revRows.length} transactions from ${pendingImport.name}`, items: revRows, duplicates: dups, checked: dups.map(d => !d) });
-      } else {
-        setAttachedFile({ name: pendingImport.name, text: pendingImport.text });
-        setFileType(pendingImport.fileType);
-      }
+      // bank_statement (or unset) — deterministic pipeline, no AI required.
+      routeBankImport(text, pendingImport.name, learnedRules);
     }
     setMinimized(false);
     clearPendingImport?.();
@@ -4904,6 +5137,23 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
       const f = attachedFile;
       setAttachedFile(null); setFileType(null); setInput("");
       await aiInvestmentImport(f.text, f.name);
+      return;
+    }
+    // Bank statements / cost lists: same deterministic-first pipeline as the tab
+    // upload cards, so a paperclip attachment gets the same guarantee (no AI
+    // round-trip required to reach a working import).
+    if (attachedFile && fileType === "bank_statement" && !readonly) {
+      const f = attachedFile;
+      setAttachedFile(null); setFileType(null); setInput("");
+      const learnedRules = buildLearnedRules(data.transactions || [], data.merchantRules || []);
+      routeBankImport(f.text, f.name, learnedRules);
+      return;
+    }
+    if (attachedFile && fileType === "cost_list" && !readonly) {
+      const f = attachedFile;
+      setAttachedFile(null); setFileType(null); setInput("");
+      const learnedRules = buildLearnedRules(data.transactions || [], data.merchantRules || []);
+      routeCostImport(f.text, f.name, learnedRules);
       return;
     }
 
@@ -5069,13 +5319,17 @@ function AIChat({ data, setData, open, setOpen, readonly, pendingImport, clearPe
           sheets={pendingMapping.sheets}
           fileName={pendingMapping.fileName}
           guess={pendingMapping.guess}
+          kind={pendingMapping.kind || "positions"}
           onCancel={() => setPendingMapping(null)}
           onConfirm={(schema) => {
-            const b = buildPositionsFromSchema(pendingMapping.sheets, schema, pendingMapping.fileName);
+            const kind = pendingMapping.kind || "positions";
+            const cfg = MAPPER_CONFIG[kind];
+            const b = cfg.build(pendingMapping.sheets, schema, pendingMapping.fileName);
             setPendingMapping(null);
             if (b && b.items.length) {
-              setMessages(m => [...m, { role: "assistant", content: `Parsed ${b.items.length} holding${b.items.length === 1 ? "" : "s"} from your mapping. Live prices will fill in current values — review and confirm below.` }]);
-              setPendingBatch({ ...b, duplicates: b.items.map(() => false), checked: b.items.map(() => true) });
+              const dups = b.type === "transactions" ? markDuplicates(b.items, data.transactions || []) : b.items.map(() => false);
+              setMessages(m => [...m, { role: "assistant", content: `Parsed ${b.items.length} ${cfg.label}${b.items.length === 1 ? "" : "s"} from your mapping. Review and confirm below.` }]);
+              setPendingBatch({ ...b, duplicates: dups, checked: dups.map(d => !d) });
             }
           }}
         />
@@ -5344,8 +5598,13 @@ function Dashboard({ data, setTab, viewMonth, onOpenChat }) {
   const expectedSpend = totalBudget > 0 ? Math.round(totalBudget * monthFraction) : null;
   const isOverPace = expectedSpend !== null && expenses > expectedSpend;
 
-  // Uncategorized transactions (any month — "Uncategorized" means AI couldn't classify; "Other" = user confirmed)
+  // Uncategorized transactions + costs (any month — "Uncategorized" means the
+  // system couldn't classify it; "Other" means the user/import confirmed it's
+  // genuinely miscellaneous). Both transactions and cost/bill imports use this
+  // same convention — see buildTransactionsFromSchema / buildCostsFromSchema.
   const uncategorized = (data.transactions || []).filter(t => t.category === "Uncategorized");
+  const uncategorizedBills = (data.costs || []).filter(c => c.category === "Uncategorized");
+  const uncategorizedTotal = uncategorized.length + uncategorizedBills.length;
 
   // Categories at ≥90% budget
   const overBudget = (data.budgetTargets || []).filter(bt => {
@@ -5394,10 +5653,10 @@ function Dashboard({ data, setTab, viewMonth, onOpenChat }) {
     <div style={{ display: "grid", gap: 14 }}>
 
       {/* ── Alerts ── */}
-      {uncategorized.length > 0 && (
+      {uncategorizedTotal > 0 && (
         <div style={{ background: C.orange + "18", border: `1px solid ${C.orange}44`, borderRadius: 10, padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontSize: 13, color: C.orange }}>
-            ⚠ <strong>{uncategorized.length} transaction{uncategorized.length > 1 ? "s" : ""}</strong> need categorization — affects budget accuracy
+            ⚠ <strong>{uncategorizedTotal} item{uncategorizedTotal > 1 ? "s" : ""}</strong>{uncategorized.length > 0 && uncategorizedBills.length > 0 ? ` (${uncategorized.length} transaction${uncategorized.length > 1 ? "s" : ""}, ${uncategorizedBills.length} cost${uncategorizedBills.length > 1 ? "s" : ""})` : ""} need categorization — affects budget accuracy
           </div>
           <button onClick={() => setTab("expenses")} style={{ background: C.orange, border: "none", borderRadius: 7, padding: "5px 14px", color: "#000", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>Review →</button>
         </div>
@@ -5731,9 +5990,24 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  // Uncategorized review — "Uncategorized" = AI couldn't classify; "Other" = user explicitly chose it
+  // Uncategorized review — "Uncategorized" = the system couldn't classify; "Other" = confirmed miscellaneous
   const [showOtherReview, setShowOtherReview] = useState(true);
   const otherTxns = data.transactions.filter(t => t.category === "Uncategorized");
+  // Same convention applies to cost/bill imports (see buildCostsFromSchema) — surface them too.
+  const [showBillReview, setShowBillReview] = useState(true);
+  const otherBills = (data.costs || []).filter(c => c.category === "Uncategorized");
+
+  function reclassifyBill(costId, newCat) {
+    const bill = (data.costs || []).find(c => c.id === costId);
+    const keyword = bill ? (bill.name || "").toLowerCase().split(/[\s,.\-/]+/).find(w => w.length >= 4) : null;
+    setData(d => ({
+      ...d,
+      costs: (d.costs || []).map(c => c.id === costId ? { ...c, category: newCat } : c),
+      merchantRules: keyword
+        ? [...(d.merchantRules || []).filter(r => r.keyword !== keyword), { keyword, category: newCat }]
+        : (d.merchantRules || [])
+    }));
+  }
 
   function reclassify(txId, newCat) {
     const tx = data.transactions.find(t => t.id === txId);
@@ -5900,6 +6174,51 @@ function CashFlowExpenses({ data, setData, readonly, onImport, onOpenChat, onOpe
                   transactions: d.transactions.map(t => t.category === "Uncategorized" ? { ...t, category: "Other" } : t)
                 }));
                 setShowOtherReview(false);
+              }}
+              style={{ fontSize: 11, padding: "5px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceHigh, color: C.text, fontWeight: 600, cursor: "pointer" }}>
+              Leave all as Other →
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {/* ── Uncategorized bills/costs review (same "Uncategorized" vs "Other" convention) ── */}
+      {!readonly && showBillReview && otherBills.length > 0 && (
+        <Card style={{ borderLeft: `3px solid ${C.orange}`, padding: "12px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <span style={{ fontWeight: 600, fontSize: 13, color: C.orange }}>⚠ {otherBills.length} uncategorized cost{otherBills.length > 1 ? "s" : ""}</span>
+              <span style={{ fontSize: 12, color: C.muted, marginLeft: 8 }}>— the system couldn't classify these bills</span>
+            </div>
+            <button onClick={() => setShowBillReview(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 16, lineHeight: 1, padding: "0 4px" }}>×</button>
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+            Pick a specific category for each, or use <strong style={{ color: C.text }}>Other</strong> (= miscellaneous) if you don't know a better fit. Rules learned from your choices will be applied automatically next time.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {otherBills.slice(0, 15).map(c => (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                <span style={{ flex: 1, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.name}>{c.name}</span>
+                <span style={{ color: C.red, flexShrink: 0, fontVariantNumeric: "tabular-nums", width: 90, textAlign: "right" }}>−{Math.abs(c.amount)?.toLocaleString()} {c.currency} · {c.frequency}</span>
+                <select value="Uncategorized" onChange={e => reclassifyBill(c.id, e.target.value)}
+                  style={{ fontSize: 11, padding: "2px 4px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer", flexShrink: 0 }}>
+                  <option value="Uncategorized" disabled>Categorize…</option>
+                  {allCategories(data).filter(cat => cat !== "Income" && cat !== "Uncategorized").map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                </select>
+              </div>
+            ))}
+            {otherBills.length > 15 && <div style={{ fontSize: 11, color: C.muted, textAlign: "center", paddingTop: 4 }}>+ {otherBills.length - 15} more — use "Browse" below to categorize the rest</div>}
+          </div>
+          {/* Bulk "leave as Other" action */}
+          <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>Don't know a better fit for the rest?</span>
+            <button
+              onClick={() => {
+                setData(d => ({
+                  ...d,
+                  costs: (d.costs || []).map(c => c.category === "Uncategorized" ? { ...c, category: "Other" } : c)
+                }));
+                setShowBillReview(false);
               }}
               style={{ fontSize: 11, padding: "5px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surfaceHigh, color: C.text, fontWeight: 600, cursor: "pointer" }}>
               Leave all as Other →
@@ -6410,7 +6729,8 @@ function AppInner() {
     return <GDPRConsentGate userId={session.user.id} onAccept={() => setConsentGiven(true)} />;
   }
 
-  const uncategorizedCount = (data.transactions || []).filter(t => t.category === "Uncategorized").length;
+  const uncategorizedCount = (data.transactions || []).filter(t => t.category === "Uncategorized").length
+    + (data.costs || []).filter(c => c.category === "Uncategorized").length;
   const tabs = [
     { id: "dashboard", label: "Dashboard",         icon: "🏠" },
     { id: "expenses",  label: "Cash flow",         icon: "💸", badge: uncategorizedCount > 0 ? uncategorizedCount : null },
